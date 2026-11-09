@@ -19,6 +19,7 @@
 #include "core/hle/kernel/k_process.h"
 #include "core/hle/kernel/kernel.h"
 #include "core/memory.h"
+#include "hid_core/hid_core.h"
 #include "tests/core/system_test_context.h"
 #include "video_core/nx2_debug_control.h"
 
@@ -401,6 +402,152 @@ TEST_CASE("Debug server tells a waiting handler that its client left", "[core][n
         std::this_thread::sleep_for(5ms);
     }
     REQUIRE(noticed);
+}
+
+TEST_CASE("Debug input keeps its default fallback but never redirects an explicit player",
+          "[core][nx2_debug_server][nx2_debug_input_controller]") {
+    ScopedSystemTestContext context;
+    Core::System system;
+    auto& hid = system.HIDCore();
+    auto* p1 = hid.GetEmulatedController(Core::HID::NpadIdType::Player1);
+    auto* handheld = hid.GetEmulatedController(Core::HID::NpadIdType::Handheld);
+    p1->Disconnect();
+    handheld->Disconnect();
+    REQUIRE_THROWS_AS(Core::Nx2Debug::SelectInputController(hid, json::object()), std::runtime_error);
+    handheld->SetNpadStyleIndex(Core::HID::NpadStyleIndex::Handheld);
+    handheld->Connect();
+    REQUIRE(&Core::Nx2Debug::SelectInputController(hid, json::object()) == handheld);
+    REQUIRE(Core::Nx2Debug::SelectInputControllers(hid, json::object()) ==
+            std::vector<Core::HID::EmulatedController*>{handheld});
+    REQUIRE_THROWS_AS(Core::Nx2Debug::SelectInputController(hid, json{{"controller", "player1"}}),
+                      std::runtime_error);
+    p1->SetNpadStyleIndex(Core::HID::NpadStyleIndex::Fullkey);
+    p1->Connect();
+    REQUIRE(&Core::Nx2Debug::SelectInputController(hid, json::object()) == p1);
+    REQUIRE(Core::Nx2Debug::SelectInputControllers(hid, json::object()) ==
+            std::vector<Core::HID::EmulatedController*>{p1});
+}
+
+TEST_CASE("Debug group input validates every controller without changing existing input",
+          "[core][nx2_debug_server][nx2_debug_input_controller]") {
+    ScopedSystemTestContext context;
+    Core::System system;
+    auto& hid = system.HIDCore();
+    auto* p1 = hid.GetEmulatedController(Core::HID::NpadIdType::Player1);
+    auto* p2 = hid.GetEmulatedController(Core::HID::NpadIdType::Player2);
+    p1->SetNpadStyleIndex(Core::HID::NpadStyleIndex::Fullkey);
+    p1->Connect();
+    p2->Disconnect();
+    p1->SetInputInjector([] {
+        return std::optional{Core::HID::InjectedInput{.buttons = Core::HID::NpadButton::X}};
+    });
+    SCOPE_EXIT { p1->SetInputInjector({}); };
+    const json pair{{"controllers", {"player1", "player2"}}};
+    REQUIRE_THROWS_AS(Core::Nx2Debug::SelectInputControllers(hid, pair), std::runtime_error);
+    CHECK(p1->GetNpadButtons().raw == Core::HID::NpadButton::X);
+    p2->SetNpadStyleIndex(Core::HID::NpadStyleIndex::Fullkey);
+    p2->Connect();
+    REQUIRE(Core::Nx2Debug::SelectInputControllers(hid, pair) ==
+            std::vector<Core::HID::EmulatedController*>{p1, p2});
+    for (const json& bad : {json{{"controllers", json::array()}},
+                            json{{"controllers", "player1"}}, json{{"controllers", nullptr}},
+                            json{{"controllers", {"player1", "player1"}}},
+                            json{{"controllers", {"player1", "player9"}}},
+                            json{{"controllers", {"player1", 2}}},
+                            json{{"controllers", {"player1"}}, {"controller", "player2"}},
+                            json{{"controllers", json::array({"player1", "player2", "player3",
+                                                              "player4", "player5", "player6",
+                                                              "player7", "player8", "player1"})}}}) {
+        CAPTURE(bad.dump());
+        REQUIRE_THROWS_AS(Core::Nx2Debug::SelectInputControllers(hid, bad), std::runtime_error);
+        CHECK(p1->GetNpadButtons().raw == Core::HID::NpadButton::X);
+        CHECK(p2->GetNpadButtons().raw == Core::HID::NpadButton::None);
+    }
+}
+
+TEST_CASE("Debug group input shares frame boundaries and releases every controller",
+          "[core][nx2_debug_server][nx2_debug_input_controller]") {
+    ScopedSystemTestContext context;
+    Core::System system;
+    auto& hid = system.HIDCore();
+    for (const auto id : {Core::HID::NpadIdType::Player1, Core::HID::NpadIdType::Player2}) {
+        auto* controller = hid.GetEmulatedController(id);
+        controller->SetNpadStyleIndex(Core::HID::NpadStyleIndex::Fullkey);
+        controller->Connect();
+    }
+    const auto controllers = Core::Nx2Debug::SelectInputControllers(
+        hid, json{{"controllers", {"player1", "player2"}}});
+    const std::vector<Core::Nx2Debug::InputStep> steps{
+        Core::Nx2Debug::ParseInputStep(json{{"buttons", {"B"}}, {"frames", 10}})};
+    const u64 previous_present = Core::g_nx2_present_count.load();
+    SCOPE_EXIT { Core::g_nx2_present_count = previous_present; };
+    const auto check_buttons = [&](Core::HID::NpadButton buttons) {
+        for (const auto* controller : controllers) {
+            CHECK(controller->GetNpadButtons().raw == buttons);
+        }
+        CHECK(hid.GetEmulatedController(Core::HID::NpadIdType::Player3)->GetNpadButtons().raw ==
+              Core::HID::NpadButton::None);
+    };
+    SECTION("normal completion") {
+        Core::Nx2Debug::RunInputScript(controllers, steps, 100, [&] {
+            Core::g_nx2_present_count = 99;
+            check_buttons(Core::HID::NpadButton::None);
+            Core::g_nx2_present_count = 100;
+            check_buttons(Core::HID::NpadButton::B);
+            Core::g_nx2_present_count = 109;
+            check_buttons(Core::HID::NpadButton::B);
+            Core::g_nx2_present_count = 110;
+            check_buttons(Core::HID::NpadButton::None);
+        });
+    }
+    SECTION("wait aborts while both controllers hold input") {
+        REQUIRE_THROWS_AS(Core::Nx2Debug::RunInputScript(controllers, steps, 100, [&] {
+                             Core::g_nx2_present_count = 100;
+                             check_buttons(Core::HID::NpadButton::B);
+                             throw std::runtime_error{"simulated disconnect"};
+                         }), std::runtime_error);
+    }
+    // Revisit an active script frame to distinguish removed injectors from an expired script.
+    Core::g_nx2_present_count = 100;
+    check_buttons(Core::HID::NpadButton::None);
+}
+
+TEST_CASE("Debug input selects every player and isolates player two input",
+          "[core][nx2_debug_server][nx2_debug_input_controller]") {
+    ScopedSystemTestContext context;
+    Core::System system;
+    auto& hid = system.HIDCore();
+    for (u32 i = 0; i < 8; ++i) {
+        auto* controller = hid.GetEmulatedController(static_cast<Core::HID::NpadIdType>(i));
+        const json params{{"controller", "player" + std::to_string(i + 1)}};
+        controller->Disconnect();
+        REQUIRE_THROWS_AS(Core::Nx2Debug::SelectInputController(hid, params), std::runtime_error);
+        controller->SetNpadStyleIndex(Core::HID::NpadStyleIndex::Fullkey);
+        controller->Connect();
+        REQUIRE(&Core::Nx2Debug::SelectInputController(hid, params) == controller);
+    }
+    auto& p2 = Core::Nx2Debug::SelectInputController(hid, json{{"controller", "player2"}});
+    const auto step = Core::Nx2Debug::ParseInputStep(json{{"buttons", {"A"}}, {"frames", 15}});
+    p2.SetInputInjector([&] { return std::optional{step.input}; });
+    SCOPE_EXIT { p2.SetInputInjector({}); };
+    REQUIRE(p2.GetNpadButtons().raw == Core::HID::NpadButton::A);
+    REQUIRE(hid.GetEmulatedController(Core::HID::NpadIdType::Player1)->GetNpadButtons().raw ==
+            Core::HID::NpadButton::None);
+    p2.SetInputInjector({});
+    REQUIRE(p2.GetNpadButtons().raw == Core::HID::NpadButton::None);
+}
+
+TEST_CASE("Debug input rejects malformed controller selectors",
+          "[core][nx2_debug_server][nx2_debug_input_controller]") {
+    ScopedSystemTestContext context;
+    Core::System system;
+    for (const json& value : {json(nullptr), json(2), json(true), json("player0"), json("player9"),
+                              json("player10"), json("Player2"), json("handheld"), json("")}) {
+        CAPTURE(value.dump());
+        REQUIRE_THROWS_AS(
+            Core::Nx2Debug::SelectInputController(system.HIDCore(), json{{"controller", value}}),
+            std::runtime_error);
+    }
 }
 
 TEST_CASE("Debug input steps parse buttons, sticks and frames", "[core][nx2_debug_server]") {

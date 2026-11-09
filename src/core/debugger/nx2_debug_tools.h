@@ -4,6 +4,7 @@
 #pragma once
 
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -22,6 +23,10 @@ class System;
 
 namespace Core::Memory {
 class Memory;
+}
+
+namespace Core::HID {
+class HIDCore;
 }
 
 namespace Core::Nx2Debug {
@@ -83,6 +88,19 @@ struct InputStep {
     HID::InjectedInput input;
     u64 frames;
 };
+
+/// Selects a connected player1..player8 controller; omission keeps the P1/handheld fallback.
+[[nodiscard]] HID::EmulatedController& SelectInputController(HID::HIDCore& hid,
+                                                           const nlohmann::json& params);
+
+/// Validates all requested controllers before any injector is installed.
+[[nodiscard]] std::vector<HID::EmulatedController*> SelectInputControllers(
+    HID::HIDCore& hid, const nlohmann::json& params);
+
+/// Runs wait with one frame-timed script installed on every controller; always removes it.
+void RunInputScript(std::span<HID::EmulatedController* const> controllers,
+                    const std::vector<InputStep>& steps, u64 start,
+                    const std::function<void()>& wait);
 
 /// {buttons?, left_stick?, right_stick?, frames}. Sticks are [x, y] in -1..1. Throws
 /// std::runtime_error on unknown keys, buttons or out-of-range values.

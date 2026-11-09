@@ -299,9 +299,9 @@ How the reads are safe:
 
 ### Input (implemented)
 
-**`input`** `{buttons?, left_stick?, right_stick?, frames, timeout_s?}` holds the buttons and
+**`input`** `{buttons?, left_stick?, right_stick?, frames, controller?, controllers?, timeout_s?}` holds the buttons and
 sticks for `frames` presented frames and then releases them. It returns when they are done.
-**`input_sequence`** `{steps: [{buttons?, left_stick?, right_stick?, frames}, ...], timeout_s?}`
+**`input_sequence`** `{steps: [{buttons?, left_stick?, right_stick?, frames}, ...], controller?, controllers?, timeout_s?}`
 runs the steps back to back, at most 1000 steps and 36000 frames per call. A step with no
 buttons and no sticks injects nothing, so it works as a pause between moves.
 
@@ -317,8 +317,19 @@ every update (`src/hid_core/resources/npad/npad.cpp:449`). Injected buttons are 
 owner's, and an injected stick replaces the owner's stick and its `StickL*` or `StickR*`
 direction bits (threshold half of full scale, like a real stick). It changes no mapping, profile
 or setting, so it works with whatever the owner has mapped and leaves nothing behind. The input
-goes to player 1, or to the handheld controller when player 1 is not connected; the result names
-which. When no injector is installed, each getter costs one atomic load.
+goes to player 1, or to the handheld controller when player 1 is not connected, by default.
+An optional top-level `controller` selects `player1` through `player8`; explicit selections must
+be connected and never fall back to another controller. For example,
+`{"method":"input","params":{"controller":"player2","buttons":["A"],"frames":15}}`
+presses A on player 2. The result names the controller used. When no injector is installed, each
+getter costs one atomic load.
+
+Alternatively, top-level `controllers` accepts 1 to 8 distinct player names. All must be connected;
+empty, malformed or duplicate lists and requests containing both selectors are rejected before
+installing input. Every selected player receives the same script at the same starting present.
+For example, `{"method":"input","params":{"controllers":["player1","player2"],"buttons":["B"],"frames":60}}`
+holds B for both players together. Array requests return `controllers` instead of `controller`.
+All installed injectors are removed together on completion, timeout, disconnect or exception.
 
 Timing is by presents, not wall time. `RunInput` starts the script at `g_nx2_present_count + 1`,
 the next present. The injector looks up the active step from the present count at every read

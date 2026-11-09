@@ -207,11 +207,13 @@ TOOLS = [
     },
     {
         "name": "input",
-        "description": "Holds buttons and sticks on player 1 (or the handheld controller) for "
+        "description": "Holds buttons and sticks on the selected controller (default player 1, "
+                       "falling back to handheld) for "
                        "'frames' presented frames from the next present on, then releases; returns "
                        "when done. Buttons are added to the owner's; a given stick replaces the "
                        "owner's. Fails and releases when frames stop (paused or loading) for "
-                       "timeout_s (default frames / 20 + 10).",
+                       "timeout_s (default frames / 20 + 10). Use controllers to hold the same "
+                       "input on several connected players simultaneously; do not also set controller.",
         "inputSchema": {
             "type": "object",
             "properties": {**{
@@ -220,8 +222,13 @@ TOOLS = [
                 "right_stick": STICK,
                 "frames": {"type": "integer", "minimum": 1, "maximum": 36000},
             },
+                           "controller": {"type": "string", "enum": [f"player{i}" for i in range(1, 9)]},
+                           "controllers": {"type": "array", "minItems": 1, "maxItems": 8,
+                                           "uniqueItems": True,
+                                           "items": {"type": "string", "enum": [f"player{i}" for i in range(1, 9)]}},
                            "timeout_s": {"type": "integer", "minimum": 1, "maximum": 900}},
             "required": ["frames"],
+            "not": {"required": ["controller", "controllers"]},
         },
     },
     {
@@ -229,7 +236,9 @@ TOOLS = [
         "description": "Runs input steps back to back, each for exactly its 'frames' presented "
                        "frames, so a camera pan or walk replays identically for an A/B test. A "
                        "step without buttons or sticks leaves the owner's input alone. At most "
-                       "1000 steps and 36000 frames.",
+                       "1000 steps and 36000 frames. Optional controller selects player1..player8; "
+                       "omitting it keeps the player 1/handheld default. Alternatively, controllers "
+                       "runs the same sequence on several connected players simultaneously.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -241,9 +250,14 @@ TOOLS = [
                 "frames": {"type": "integer", "minimum": 1, "maximum": 36000},
             },
                                     "required": ["frames"]}},
+                "controller": {"type": "string", "enum": [f"player{i}" for i in range(1, 9)]},
+                "controllers": {"type": "array", "minItems": 1, "maxItems": 8,
+                                "uniqueItems": True,
+                                "items": {"type": "string", "enum": [f"player{i}" for i in range(1, 9)]}},
                 "timeout_s": {"type": "integer", "minimum": 1, "maximum": 900},
             },
             "required": ["steps"],
+            "not": {"required": ["controller", "controllers"]},
         },
     },
 ]

@@ -577,7 +577,7 @@ json ReadGpuMemory(ToolState& state, const json& params) {
     return result;
 }
 
-/// Holds the steps on player 1 (or the handheld controller when player 1 is not connected) from
+/// Holds the steps on the selected controllers from
 /// the next present on, and returns once they are done. The injector stops by itself after the
 /// last step; leaving this function by any path removes it.
 json RunInput(ToolState& state, const std::vector<InputStep>& steps, const json& params,
@@ -590,59 +590,59 @@ json RunInput(ToolState& state, const std::vector<InputStep>& steps, const json&
         throw std::runtime_error{
             fmt::format("{} frames in total; at most {} per call", total, MAX_INPUT_FRAMES)};
     }
-    auto& hid = state.system.HIDCore();
-    HID::EmulatedController* controller = hid.GetEmulatedController(HID::NpadIdType::Player1);
-    std::string name = "player1";
-    if (!controller->IsConnected()) {
-        controller = hid.GetEmulatedController(HID::NpadIdType::Handheld);
-        name = "handheld";
-    }
-    if (!controller->IsConnected()) {
-        throw std::runtime_error{"neither player 1 nor the handheld controller is connected"};
+    const auto controllers = SelectInputControllers(state.system.HIDCore(), params);
+    json names = json::array();
+    for (const auto* controller : controllers) {
+        const auto id = controller->GetNpadIdType();
+        names.push_back(id == HID::NpadIdType::Handheld
+                            ? "handheld"
+                            : fmt::format("player{}", static_cast<u32>(id) + 1));
     }
     const int timeout = Param<int>(params, "timeout_s", static_cast<int>(total / 20 + 10), 1, 900);
     const u64 start = g_nx2_present_count.load(std::memory_order_relaxed) + 1;
-    const auto script = std::make_shared<const std::vector<InputStep>>(steps);
-    controller->SetInputInjector([script, start] {
-        return InputAt(*script, start, g_nx2_present_count.load(std::memory_order_relaxed));
-    });
-    SCOPE_EXIT {
-        controller->SetInputInjector({});
-    };
     const auto begin = std::chrono::steady_clock::now();
     const auto deadline = begin + std::chrono::seconds{timeout};
-    for (;;) {
-        const u64 now = g_nx2_present_count.load(std::memory_order_relaxed);
-        if (now >= start + total) {
-            break;
+    RunInputScript(controllers, steps, start, [&] {
+        for (;;) {
+            const u64 now = g_nx2_present_count.load(std::memory_order_relaxed);
+            if (now >= start + total) {
+                break;
+            }
+            if (state.stopping.load(std::memory_order_relaxed)) {
+                throw std::runtime_error{"the game is shutting down; input released"};
+            }
+            if (client_gone()) {
+                LOG_INFO(Debug, "Debug server client left during input; input released");
+                throw std::runtime_error{"the client disconnected; input released"};
+            }
+            if (std::chrono::steady_clock::now() >= deadline) {
+                throw std::runtime_error{fmt::format(
+                    "{} of {} frames were presented within {} s (paused or loading?); input released",
+                    now >= start ? now - start : 0, total, timeout)};
+            }
+            std::this_thread::sleep_for(2ms);
         }
-        if (state.stopping.load(std::memory_order_relaxed)) {
-            throw std::runtime_error{"the game is shutting down; input released"};
-        }
-        if (client_gone()) {
-            LOG_INFO(Debug, "Debug server client left during input; input released");
-            throw std::runtime_error{"the client disconnected; input released"};
-        }
-        if (std::chrono::steady_clock::now() >= deadline) {
-            throw std::runtime_error{fmt::format(
-                "{} of {} frames were presented within {} s (paused or loading?); input released",
-                now >= start ? now - start : 0, total, timeout)};
-        }
-        std::this_thread::sleep_for(2ms);
-    }
-    return {
-        {"controller", name},
+    });
+    json result = {
         {"steps", steps.size()},
         {"frames", total},
         {"first_present", start},
         {"elapsed_s",
          std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count()},
     };
+    if (params.contains("controllers")) {
+        result["controllers"] = std::move(names);
+    } else {
+        result["controller"] = names.front();
+    }
+    return result;
 }
 
 json Input(ToolState& state, const json& params, const ClientGone& client_gone) {
     json step = params;
     step.erase("timeout_s");
+    step.erase("controller");
+    step.erase("controllers");
     return RunInput(state, {ParseInputStep(step)}, params, client_gone);
 }
 
@@ -689,6 +689,72 @@ Handlers MakeHandlers(const std::shared_ptr<ToolState>& state) {
 }
 
 } // Anonymous namespace
+
+HID::EmulatedController& SelectInputController(HID::HIDCore& hid, const json& params) {
+    if (const auto selected = params.find("controller"); selected != params.end()) {
+        if (!selected->is_string()) {
+            throw std::runtime_error{"controller must be player1 through player8"};
+        }
+        const auto& name = selected->get_ref<const std::string&>();
+        if (name.size() != 7 || !name.starts_with("player") || name[6] < '1' || name[6] > '8') {
+            throw std::runtime_error{"controller must be player1 through player8"};
+        }
+        auto* controller = hid.GetEmulatedController(static_cast<HID::NpadIdType>(name[6] - '1'));
+        if (!controller->IsConnected()) {
+            throw std::runtime_error{fmt::format("{} is not connected", name)};
+        }
+        return *controller;
+    }
+    auto* controller = hid.GetEmulatedController(HID::NpadIdType::Player1);
+    if (!controller->IsConnected()) {
+        controller = hid.GetEmulatedController(HID::NpadIdType::Handheld);
+    }
+    if (!controller->IsConnected()) {
+        throw std::runtime_error{"neither player 1 nor the handheld controller is connected"};
+    }
+    return *controller;
+}
+
+std::vector<HID::EmulatedController*> SelectInputControllers(HID::HIDCore& hid, const json& params) {
+    const auto selected = params.find("controllers");
+    if (selected == params.end()) {
+        return {&SelectInputController(hid, params)};
+    }
+    if (params.contains("controller")) {
+        throw std::runtime_error{"use controller or controllers, not both"};
+    }
+    if (!selected->is_array() || selected->empty() || selected->size() > 8) {
+        throw std::runtime_error{"controllers must be an array of 1 to 8 distinct players"};
+    }
+    std::vector<HID::EmulatedController*> controllers;
+    for (const auto& name : *selected) {
+        auto* controller = &SelectInputController(hid, json{{"controller", name}});
+        if (std::ranges::find(controllers, controller) != controllers.end()) {
+            throw std::runtime_error{"controllers must not contain duplicates"};
+        }
+        controllers.push_back(controller);
+    }
+    return controllers;
+}
+
+void RunInputScript(std::span<HID::EmulatedController* const> controllers,
+                    const std::vector<InputStep>& steps, u64 start,
+                    const std::function<void()>& wait) {
+    const auto script = std::make_shared<const std::vector<InputStep>>(steps);
+    size_t installed = 0;
+    SCOPE_EXIT {
+        for (size_t i = 0; i < installed; ++i) {
+            controllers[i]->SetInputInjector({});
+        }
+    };
+    for (auto* controller : controllers) {
+        controller->SetInputInjector([script, start] {
+            return InputAt(*script, start, g_nx2_present_count.load(std::memory_order_relaxed));
+        });
+        ++installed;
+    }
+    wait();
+}
 
 u64 ParseShaderHash(std::string_view text) {
     const std::string_view digits =
