@@ -174,6 +174,7 @@ add_executable(tests
     video_core/indirect_reset.cpp
     video_core/viewport_dirty_state.cpp
     video_core/present_transfer_sync.cpp
+    video_core/texture_transfer_sync.cpp
     input_common/calibration_configuration_job.cpp
 )
 
