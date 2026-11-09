@@ -15,6 +15,7 @@
 
 #include "common/page_table.h"
 #include "common/scope_exit.h"
+#include "common/settings.h"
 #include "core/core.h"
 #include "core/device_memory.h"
 #include "core/hle/kernel/k_process.h"
@@ -836,4 +837,80 @@ TEST_CASE("Maxwell3D's split front uploads macro code sent as one multi-method r
     const auto& macros = engine.GetNativeMacroEngine();
     REQUIRE(macros.native_write_offset == pointer * 3 + code.size());
     CHECK(std::equal(code.begin(), code.end(), macros.native_code.begin() + pointer * 3));
+}
+
+TEST_CASE("Accurate native MME retains fetched parameters after command memory is reused",
+          "[video_core][native_macro][native_macro_fetched_parameters]") {
+    Fixture f;
+    f.system.Initialize();
+    const auto previous_accuracy = Settings::values.current_gpu_accuracy;
+    SCOPE_EXIT { Settings::values.current_gpu_accuracy = previous_accuracy; };
+    Settings::values.current_gpu_accuracy = Settings::GpuAccuracy::High;
+    Kernel::KProcess process{f.system.Kernel()};
+    SCOPE_EXIT { f.system.Kernel().UnregisterKernelObject(&process); };
+    auto& table = process.GetPageTable().GetImpl();
+    table.Resize(20, 12);
+    constexpr VAddr cpu_address = 0x4000;
+    constexpr DAddr device_address = 0x10000;
+    constexpr GPUVAddr gpu_address = 0x100000;
+    auto* backing = f.physical.GetPointerFromRaw<u8>(device_address);
+    table.entries.GetAndFault(cpu_address >> 12)
+        .Store(false, Common::PageType::Memory, 1,
+               reinterpret_cast<uintptr_t>(backing) - cpu_address);
+    process.GetMemory().SetCurrentPageTable(process);
+    const auto asid = f.device_memory.RegisterProcess(&process.GetMemory());
+    f.device_memory.BindInterface(&f.rasterizer);
+    f.device_memory.Map(device_address, cpu_address, 0x1000, asid);
+    SCOPE_EXIT {
+        f.device_memory.Unmap(device_address, 0x1000);
+        f.device_memory.UnregisterProcess(asid);
+    };
+    f.memory.BindRasterizer(&f.rasterizer);
+    f.memory.Map(gpu_address, device_address, 0x1000, Tegra::PTEKind::PITCH, false);
+
+    auto& engine = f.slow;
+    engine.SetNativeTuringMacroMode(true);
+    auto& macros = engine.GetNativeMacroEngine();
+    macros.ClearCode(0);
+    engine.GetNativeMacroPositions()[0] = 0;
+    // Each instruction emits one FIFO word. The second is the first instruction's exit delay slot.
+    const auto instruction = [](u32 method, bool end) {
+        std::array<u32, 3> bits{};
+        const auto field = [&](u32 offset, u32 count, u32 value) {
+            for (u32 bit = 0; bit < count; ++bit) {
+                bits[(offset + bit) / 32] |= ((value >> bit) & 1) << ((offset + bit) % 32);
+            }
+        };
+        field(0, 1, end);
+        for (u32 lane = 0; lane < 2; ++lane) {
+            field(15 + lane * 36, 5, 24);
+            field(20 + lane * 36, 5, 24);
+            field(25 + lane * 36, 5, 24);
+        }
+        field(30, 16, method);
+        field(82, 3, 5);
+        field(85, 4, 3);
+        return std::array<u32, 3>{bits[2], bits[1], bits[0]};
+    };
+    constexpr u32 first_register = MAXWELL3D_REG_INDEX(vertex_buffer.first);
+    constexpr u32 second_register = MAXWELL3D_REG_INDEX(vertex_buffer.count);
+    for (const auto code : {instruction(first_register, true), instruction(second_register, false)}) {
+        for (const u32 word : code) {
+            macros.AddCode(0, word);
+        }
+    }
+    constexpr std::array<u32, 2> fetched{7, 13};
+    constexpr u32 reused = 99;
+    std::memcpy(backing, fetched.data(), sizeof(fetched));
+    engine.current_dma_segment = gpu_address;
+    engine.current_dirty = true;
+    engine.CallMethod(f.system, 0xe00, fetched[0], false);
+    // The earlier GP entry can be reused while the next entry supplies the final parameter.
+    std::memcpy(backing, &reused, sizeof(reused));
+    REQUIRE(f.memory.Read<u32>(gpu_address) == reused);
+    engine.current_dma_segment = gpu_address + sizeof(u32);
+    engine.CallMethod(f.system, 0xe01, fetched[1], true);
+    CHECK_FALSE(macros.native_execution_failed);
+    CHECK(engine.regs.reg_array[first_register] == fetched[0]);
+    CHECK(engine.regs.reg_array[second_register] == fetched[1]);
 }
