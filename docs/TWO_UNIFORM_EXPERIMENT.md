@@ -109,6 +109,12 @@ Shutdown, cache replacement and real queued lifetime remain separately scoped
 runtime checks. The experiment stays off by default. Failure cleanup does not
 promise graceful application shutdown for every allocation or driver failure.
 
+The subsequent [Candidate 7 runtime checks](C7_RUNTIME_RESULTS.md) recorded
+compatible types for the eligible target and the expected storage exclusion for
+the negative control. The enabled validation run then hung after close; the
+normal disabled run completed the opening, movement and shutdown. This is not
+a demonstrated cause of the hang. Default activation is not promoted.
+
 The upstream reference checked for the original uniform declaration behavior is
 `zortos293/Lichii` commit `cbb512ee7a9de9d9dbe2f865ec2e468888503214`.
 Its uniform texel declarations use Float. This local experiment is not an
