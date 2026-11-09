@@ -1,6 +1,68 @@
 # Numbered build history
 
-## Build 2 — latest and recommended
+## Build 3 — latest and recommended
+
+[Released 2026-11-09 as a pre-release](https://github.com/ZenKhalil/Lichii-Orbitals/releases/tag/build-3).
+Source/tag:
+[`726551be31ceffb061c8f193b9c336727d85da85`](https://github.com/ZenKhalil/Lichii-Orbitals/commit/726551be31ceffb061c8f193b9c336727d85da85)
+(`build-3`). This is the exact numbered binary's source; later documentation or
+recommendation updates do not relabel it.
+
+Recommended for demonstrated Vulkan transfer/order, stride-state and Win32
+surface corrections, plus narrow numeric-type handling and conflicting-capture
+serialization refusal. This does not resolve every numeric mismatch, intermittent
+visual artifact or the room FPS deficit.
+
+| Check on this numbered binary | Result |
+|---|---|
+| Selected native regressions | 174 cases, 53,298,980 assertions passed; overlapping focused two-uniform selection: 2 cases, 500,685 assertions passed |
+| Compiler/cache selection | 96 cases, 448,273 assertions passed |
+| Opening/room route | Opening reached, then skipped; stationary room: 25.031270 FPS over 30 seconds and 25.277959 FPS over 20 seconds |
+| Movement and visual observation | Both players walked; Player 1 turned the camera. Inspected views were intact; no matched machinery-view comparison or artifact-fix claim |
+| Audio | Stereo 48 kHz; last logged copied = accepted = 19,560,224 frames, 245.33 ms padding, zero full/retry events; no host audio fault |
+| Shutdown | Normal UI close, cleanup and verified OS exit; no OS kill or guest panic |
+| Package/import checks | 38 executable/DLL files checked; no missing regular or delay imports on the test host; public projection retains tested binary bytes |
+
+GUI SHA256: `6f17cb0fcbfa246e40aa9be370643885eeee2a36bf9aacfa91b1ba0aa48acb2e`.
+CLI SHA256: `45b7e6398a31dfbb2317c56e21a363bbe8bbd3ccdc72f95dba871da1dacbeb38`.
+The 446.87-second launch-to-observed-exit smoke used no Vulkan validation layer.
+The wider audio brackets around both room windows added no padding, deferred events,
+full-queue events or retries. Last logged totals precede the close request; they are
+not exact post-close totals or an audibility test. The same 135 known startup errors
+remained, with no new error or native graphics rejection. This numbered run did not
+test the full opening or six-channel output.
+
+Separate historical Candidate 7 evidence, source `028ea242`, completed the
+opening without skips, room measurements, camera movement and normal shutdown
+with both experiments off. Opening samples were 29.59 / 29.45 FPS; stationary-room
+samples were 24.28 / 25.00 FPS. See [its runtime report](C7_RUNTIME_RESULTS.md).
+Those are candidate windows, not measurements of the newly numbered executable.
+No sustained 30 FPS or 60 FPS result is established.
+
+PAUSE2 and MULTI_UNIFORM2 remain unset. The one/two/one-PAUSE comparison retained
+the one-PAUSE default after the two-PAUSE arm was slower. The enabled two-uniform
+validation run selected compatible types for one eligible target but failed
+shutdown; its cause remains open in [#34](https://github.com/ZenKhalil/Lichii-Orbitals/issues/34).
+Normal smoke, synthetic GPU values and instrumented target checks retain their
+separate scopes. Audio endpoint-loss recovery and remaining graphics/joint-resource
+numeric mismatches are not claimed fixed.
+
+Release assets:
+
+- [Windows player ZIP](https://github.com/ZenKhalil/Lichii-Orbitals/releases/download/build-3/Lichii-Orbitals-build-3-windows-x86_64.zip).
+- [Exact Build 3 application source](https://github.com/ZenKhalil/Lichii-Orbitals/releases/download/build-3/Lichii-Orbitals-build-3-source.tar.gz).
+- [Shared dependency sources](https://github.com/ZenKhalil/Lichii-Orbitals/releases/download/build-3/Lichii-Orbitals-build-1-dependency-sources.zip).
+- [Checksums](https://github.com/ZenKhalil/Lichii-Orbitals/releases/download/build-3/SHA256SUMS-build-3.txt).
+
+Current dependency source/header/generated inputs, build recipes/options and all 35 runtime DLLs were checked for reuse. The shared supplement retains
+its Build 1 audit/reconstruction metadata and SHA256
+`f93da02b3a87bbfe1420baae7b36c9a6b24d5da27db40060b2d86e241a3c4885`;
+Build 3 application source is separate. No bit-identical rebuilt-static-library
+claim is made. Upstream updates and heavy diagnostics are off; preload 0 and
+WAITPKG-disabled one-PAUSE are the packaged defaults. Build 1/2 artifacts and source
+tags remain unchanged and available as historical rollback points.
+
+## Build 2 — previous numbered rollback
 
 [Released 2026-11-09 as a pre-release](https://github.com/ZenKhalil/Lichii-Orbitals/releases/tag/build-2).
 Source/tag: [`c7ada3ec4119d69fce7290e8ec6e09b847263972`](https://github.com/ZenKhalil/Lichii-Orbitals/commit/c7ada3ec4119d69fce7290e8ec6e09b847263972)
@@ -11,7 +73,7 @@ Build 2 corrects the Vulkan viewport dirty dependency after a depth-mode-only
 update, addressing [#3](https://github.com/ZenKhalil/Lichii-Orbitals/issues/3).
 The actual linked regression failed the missing dependency assertion before the
 fix and passed all 343 assertions across four cases afterward. The optional
-viewport observer is disabled by default. Build 2 is recommended for this
+viewport observer is disabled by default. Build 2 was recommended at release for this
 verified correctness fix and the retained startup/audio behavior; no FPS
 improvement or cure for the reported left-view artifacts is claimed.
 

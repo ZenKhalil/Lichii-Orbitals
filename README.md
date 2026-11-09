@@ -15,87 +15,57 @@ It is independent of those projects and is not affiliated with Nintendo.
 
 | Build | Status | Recommendation |
 |---|---|---|
-| [Build 2](https://github.com/ZenKhalil/Lichii-Orbitals/releases/tag/build-2) | Pre-release · Latest · Recommended | Corrects the verified viewport depth dependency; startup/audio checks passed; rendering and performance issues remain open |
-| [Build 1](https://github.com/ZenKhalil/Lichii-Orbitals/releases/tag/build-1) | Pre-release · Previous baseline | Original numbered startup/audio and memory/monitor corrections; lacks the Build 2 viewport dependency fix |
+| [Build 3](https://github.com/ZenKhalil/Lichii-Orbitals/releases/tag/build-3) | Pre-release · Latest · Recommended | Verified Vulkan command/state repairs and narrow texel-type handling; rendering, audio-recovery and performance issues remain |
+| [Build 2](https://github.com/ZenKhalil/Lichii-Orbitals/releases/tag/build-2) | Pre-release · Previous rollback | Retains the viewport dependency correction and its recorded startup/audio validation |
+| [Build 1](https://github.com/ZenKhalil/Lichii-Orbitals/releases/tag/build-1) | Pre-release · Historical baseline | Original numbered startup/audio and memory/monitor corrections |
 
-[Download Build 2 for Windows x64](https://github.com/ZenKhalil/Lichii-Orbitals/releases/download/build-2/Lichii-Orbitals-build-2-windows-x86_64.zip).
-The release also includes [exact application source](https://github.com/ZenKhalil/Lichii-Orbitals/releases/download/build-2/Lichii-Orbitals-build-2-source.tar.gz),
-the [shared dependency source supplement](https://github.com/ZenKhalil/Lichii-Orbitals/releases/download/build-2/Lichii-Orbitals-build-1-dependency-sources.zip)
-and [checksums](https://github.com/ZenKhalil/Lichii-Orbitals/releases/download/build-2/SHA256SUMS-build-2.txt).
-The unchanged dependency supplement retains its Build 1 name and audit metadata;
-Build 2's dependency inputs/options and all 35 runtime DLLs were checked against
-Build 1. It is separate from Build 2's application source, and is not a claim of
-a bit-identical dependency rebuild.
-[Build history](docs/BUILD_HISTORY.md) records each numbered binary's validation.
-**Latest** identifies the newest published build; **recommended** identifies
-the tested choice. A newer diagnostic build does not automatically replace it.
+[Download Build 3 for Windows x64](https://github.com/ZenKhalil/Lichii-Orbitals/releases/download/build-3/Lichii-Orbitals-build-3-windows-x86_64.zip).
+The release also provides [exact application source](https://github.com/ZenKhalil/Lichii-Orbitals/releases/download/build-3/Lichii-Orbitals-build-3-source.tar.gz),
+[dependency sources](https://github.com/ZenKhalil/Lichii-Orbitals/releases/download/build-3/Lichii-Orbitals-build-1-dependency-sources.zip)
+and [checksums](https://github.com/ZenKhalil/Lichii-Orbitals/releases/download/build-3/SHA256SUMS-build-3.txt).
+Build 3's binary source is
+[`726551be`](https://github.com/ZenKhalil/Lichii-Orbitals/commit/726551be31ceffb061c8f193b9c336727d85da85).
+Later documentation commits do not change that identity. The reused dependency
+supplement retains its original Build 1 name and reconstruction notices;
+current dependency source/header/generated inputs, build recipes/options and all 35 runtime DLLs were checked for reuse.
 
-Extract the complete Windows archive and run `lichii.exe`. Existing Eden data
-directories remain in use; no save migration is required. Games, keys, firmware,
+Extract the complete archive and run `lichii.exe`. Existing Eden user data remains
+in use; no save migration or cache deletion is required. Games, keys, firmware,
 saves and shader caches are not included. Use your own lawfully obtained files.
+[Build history](docs/BUILD_HISTORY.md) records each numbered binary's tests and
+runtime scope. Latest means the newest published build; recommended means the
+tested choice, not complete compatibility.
 
-## Current scope
+## Current scope and limits
 
-Build 2 retains the fixes that pass the original logo freeze and reach local co-op
-gameplay. It includes repairs for audio-ring purging, timing after pauses,
-GPU query completion, shader-source memory coherency and surround stream
-creation. It additionally corrects the Vulkan viewport dirty dependency when the
-guest changes depth mode. A linked regression demonstrated the missing dependency
-before the fix and passed afterward. This is a correctness update; no FPS
-improvement or fix for the reported left-view artifacts is claimed.
-See [change notes](docs/ORBITALS_CHANGES.md) for the evidence and limitations.
+Build 3 fixes demonstrated Vulkan presentation/texture transfer scopes, reordered
+buffer-write ordering, dynamic vertex-stride declarations and Win32 surface
+instance handling. Eligible texel families select matching numeric types without
+reinterpreting prepared views. Known-conflicting compiler captures are refused
+before disk-cache append. Existing audio, memory and viewport repairs are retained.
+See [change notes](docs/ORBITALS_CHANGES.md) for evidence and scope.
 
-The numbered binary completed the opening without skips and measured **29.97 FPS**
-in a 30-second cutscene window and **25.40 / 25.35 FPS** in two initial two-player
-room windows on the test machine. The stereo session lasted about 18 minutes
-33 seconds; a separate six-channel startup/menu check passed. Total logged audio
-padding was 310 ms and 51 ms respectively; the measured room windows added none.
-These checks do not establish stable 30 FPS throughout or complete rendering
-correctness. Brief audio underfills and loading/streaming stalls remain.
+The exact numbered binary passed a stereo startup, initial-room movement and normal-shutdown smoke with both experiments off; its 30- and 20-second room windows measured 25.03 / 25.28 FPS after skipping the opening.
+This is a correctness release: no FPS improvement or visual-artifact cure is
+claimed. Sustained 30 FPS in the initial co-op room has not been achieved;
+60 FPS is not an achieved target either. Earlier candidate measurements are
+[reported separately](docs/C7_RUNTIME_RESULTS.md), not substituted for the numbered
+binary's smoke test.
 
-Known issues still unresolved:
+Both experimental switches remain off. The two-PAUSE comparison was slower;
+the exact-two uniform experiment showed compatible target bindings but its
+enabled diagnostic run failed shutdown ([#34](https://github.com/ZenKhalil/Lichii-Orbitals/issues/34)).
+One PAUSE, selective preload and disabled heavy diagnostics remain the defaults.
 
-- [Left-view jitter, glare and static lines (#1)](https://github.com/ZenKhalil/Lichii-Orbitals/issues/1): reported intermittently; cause unconfirmed.
-- [Initial-room performance below 30 FPS (#2)](https://github.com/ZenKhalil/Lichii-Orbitals/issues/2).
+Open investigations include:
 
-A subsequent, separately instrumented run also identified Vulkan transfer,
-texel-buffer type and vertex-state faults. See the [validation findings](docs/nx2/vulkan-validation-findings.md)
-and issues [#6](https://github.com/ZenKhalil/Lichii-Orbitals/issues/6),
-[#7](https://github.com/ZenKhalil/Lichii-Orbitals/issues/7) and
-[#8](https://github.com/ZenKhalil/Lichii-Orbitals/issues/8).
-Their connection to the intermittent visual artifacts is still unconfirmed.
-Recurring source-depth and cached-compute replay diagnostics are tracked in
-[#24](https://github.com/ZenKhalil/Lichii-Orbitals/issues/24) and
-[#25](https://github.com/ZenKhalil/Lichii-Orbitals/issues/25). Their effect on
-rendering and loading remains unconfirmed.
+- [Intermittent split-screen jitter/glare/banding (#1)](https://github.com/ZenKhalil/Lichii-Orbitals/issues/1) and [room performance (#2)](https://github.com/ZenKhalil/Lichii-Orbitals/issues/2).
+- [Remaining graphics and multi-resource texel mismatches (#7)](https://github.com/ZenKhalil/Lichii-Orbitals/issues/7).
+- [Selected audio endpoint-loss recovery and shutdown (#16)](https://github.com/ZenKhalil/Lichii-Orbitals/issues/16).
+- [Non-unit copy depth (#24)](https://github.com/ZenKhalil/Lichii-Orbitals/issues/24), [historical incomplete cache replay (#25)](https://github.com/ZenKhalil/Lichii-Orbitals/issues/25), and [privateData startup validation (#28)](https://github.com/ZenKhalil/Lichii-Orbitals/issues/28).
 
-The latest tested local diagnostic, unreleased **Build 3 candidate 7**, completed
-the opening without skips, local co-op movement and normal shutdown with its
-two-uniform experiment off. Opening samples measured **29.59 / 29.45 FPS**;
-initial-room samples measured **24.28 / 25.00 FPS**. All four measured audio
-brackets added no padding or retries. It retains the synchronization, narrow
-typed-buffer and conflicting-cache-capture repairs; the numbered release is
-being prepared in [one integration PR](https://github.com/ZenKhalil/Lichii-Orbitals/pull/33).
-
-The optional two-uniform path selected compatible types for its eligible target,
-but its instrumented run hung after close. It remains disabled; the cause is
-tracked in [#34](https://github.com/ZenKhalil/Lichii-Orbitals/issues/34).
-See the [candidate's runtime results](docs/C7_RUNTIME_RESULTS.md).
-The extra-PAUSE CPU experiment also stays disabled: its same-binary comparison
-showed no benefit ([results](docs/CANDIDATE6_SAME_BINARY_RESULTS.md)).
-The user reported that the left-view issue was absent in the latest check;
-the intermittent symptom is not yet proven fixed. Build 2 remains recommended
-until the numbered Build 3 artifact passes its own checks.
-The earlier monitor-endpoint loss and shutdown hang remain open in
-[#16](https://github.com/ZenKhalil/Lichii-Orbitals/issues/16); testing on a connected
-headset does not demonstrate device-loss recovery.
-
-[The viewport dependency defect (#3)](https://github.com/ZenKhalil/Lichii-Orbitals/issues/3)
-is corrected in Build 2. The observer run saw no depth-mode transition, so the
-game checks did not dynamically exercise that repair or establish a connection
-to the left-view artifacts. Build 2 is recommended for the verified correction
-and retained startup/audio behavior. Later chapters, all graphics paths and all
-audio devices have not been validated.
+Later chapters, every graphics path and device-loss recovery are not validated.
+A clean startup or a briefly absent intermittent artifact does not close these issues.
 
 ## Reporting issues
 

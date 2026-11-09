@@ -1,30 +1,32 @@
 # Orbitals change notes
 
-## Build 3 integration — Vulkan correctness
+## Build 3 — Vulkan correctness
 
-The integrated source corrects presentation and texture-transfer dependencies,
-repeated buffer-upload ordering, dynamic vertex-stride declarations and the
-Win32 surface instance. Eligible uniform/storage texel operations select
-matching numeric-class variants from immutable compiler inputs while retaining
-the prepared view format, offset and range. Known-conflicting compute captures
-are rejected before cache serialization; existing cache records are preserved.
+[Build 3](https://github.com/ZenKhalil/Lichii-Orbitals/releases/tag/build-3) is the
+latest recommended pre-release, built from exact source
+`726551be31ceffb061c8f193b9c336727d85da85`.
+The numbered build passed a stereo startup, initial-room movement and normal-shutdown smoke with both experiments off; its 30- and 20-second room windows measured 25.03 / 25.28 FPS after skipping the opening; see [build history](BUILD_HISTORY.md)
+for the numbered executable's identities, test counts and route.
 
-The focused recorder tests and candidate Vulkan runs are recorded in the
-[validation findings](nx2/vulkan-validation-findings.md). Candidate 7 passed
-174 selected native cases and 96 compiler/cache cases, then completed the full
-opening, co-op movement and normal shutdown with both experiments off.
-Its opening samples measured 29.59 / 29.45 FPS and stationary room samples
-24.28 / 25.00 FPS. See [runtime results](C7_RUNTIME_RESULTS.md) for scope and
-audio totals. These are candidate results; the numbered artifact requires its
-own identity, linked tests and runtime smoke before release.
+The release corrects presentation/texture transfer scopes, repeated buffer-upload
+ordering, dynamic vertex-stride declarations and the Win32 surface instance.
+Eligible uniform/storage texel operations select matching numeric variants from
+immutable compiler inputs while retaining the prepared view format, offset and
+range. Known-conflicting compute captures are rejected before cache append;
+existing records are preserved. The actual recorder regressions and bounded
+application checks are documented in [validation findings](nx2/vulkan-validation-findings.md).
 
-The extra-PAUSE experiment remains disabled because it showed no benefit.
-The two-uniform experiment also remains disabled: its enabled Vulkan run
-selected compatible types for the eligible target but hung after close.
-The shutdown cause is unconfirmed and tracked in
-[#34](https://github.com/ZenKhalil/Lichii-Orbitals/issues/34).
-Remaining multi-resource numeric mismatches, intermittent visual artifacts and
-sustained 30-FPS room performance are unresolved. Full shader preload remains 0.
+Both experiments remain off. The extra PAUSE was slower in the same-binary
+comparison. The exact-two uniform path showed compatible bindings for its eligible
+target but its enabled diagnostic run failed shutdown; cause unconfirmed
+([#34](https://github.com/ZenKhalil/Lichii-Orbitals/issues/34)). Its normal option-off
+candidate completed the full opening and movement; [those results](C7_RUNTIME_RESULTS.md)
+remain separate from the numbered smoke.
+
+Remaining multi-resource numeric mismatches, intermittent artifacts, audio
+endpoint-loss recovery and sustained 30 FPS room performance are unresolved.
+No 60 FPS achievement or FPS improvement is claimed. Full preload remains 0,
+WAITPKG is disabled with one PAUSE, and diagnostics/updates are off by default.
 
 ## Build 2 — viewport dependency correction
 
@@ -49,9 +51,10 @@ no same-channel depth-mode changes or stale-depth mismatches. That run did not
 exercise this defect and does not connect the correction to the reported
 left-view jitter, glare or static lines. No FPS improvement is claimed.
 
-Build 2 is the latest recommended numbered release for the verified dependency
-correction and retained startup/audio behavior. It measured 25.40 / 25.35 FPS in
-the initial room, below the 30 FPS target. The unreleased Build 3 candidates'
+Build 2 was recommended at release for the verified dependency correction and
+retained startup/audio behavior. It remains a rollback point and measured
+25.40 / 25.35 FPS in
+the initial room, below the 30 FPS target. The earlier Build 3 candidates'
 [validation findings](nx2/vulkan-validation-findings.md#build-3-candidate-5)
 are tracked separately. Candidate 4 retains the transfer/vertex-state repairs,
 immutable compiler replay, typed storage-write variants and Win32 surface-handle
@@ -69,12 +72,13 @@ families still do not cover them. Its normal run completed the opening, movement
 and shutdown, measuring 26.57 / 27.17 FPS in cutscene samples and 25.05 / 24.45 FPS
 in the stationary initial room. The lower cutscene result is unexplained; it
 does not isolate a code regression. A left-only magenta-blue flare appeared with
-both cameras viewing the same machinery from nearby positions. Build 2 remains
-recommended; neither rendering correctness nor stable 30 FPS is established.
+both cameras viewing the same machinery from nearby positions. Build 2 remained
+recommended at that stage; those candidate observations did not establish complete
+rendering correctness or stable 30 FPS.
 
 ## Candidate 6 — correctness preparation and measured CPU experiment
 
-The unreleased candidate rejects serialization when a compute capture observes
+This historical candidate rejected serialization when a compute capture observes
 conflicting inputs. It also adds dormant ordered-uniform preparation and bounded
 shader-hash filtering for diagnostics. These changes do not activate the remaining
 multi-declaration game shaders. Native regression and synthetic value checks are
