@@ -44,7 +44,7 @@ void Report(const std::shared_ptr<const Batch>& batch, std::uint64_t pipeline, b
                      "uniform_declarations={} uniform_target_count={} uniform_offending_opcode={} "
                      "uniform_features_queried={} uniform_format_mask={:#x} "
                      "uniform_snapshot={} uniform_family_built={} "
-                     "budget={}/{} row_cap={} row_cap_hits={} allocation_failures={} "
+                     "shader_filter_hashes={} budget={}/{} row_cap={} row_cap_hits={} allocation_failures={} "
                      "abandoned_batches={} coverage=bounded_configure_not_execution",
                      pipeline, usable, descriptor_buffer,
                      row.kind == Kind::Storage ? "storage" : "uniform", row.stage,
@@ -64,7 +64,7 @@ void Report(const std::shared_ptr<const Batch>& batch, std::uint64_t pipeline, b
                      row.uniform_family.offending_opcode,
                      row.uniform_family.features_queried, row.uniform_family.supported_format_mask,
                      row.uniform_family.snapshot_available, row.uniform_family.family_built,
-                     row.ticket, row.limit, Batch::RowLimit, batch->row_cap_hits,
+                     row.shader_filter_hashes, row.ticket, row.limit, Batch::RowLimit, batch->row_cap_hits,
                      budget.allocation_failures.load(std::memory_order_relaxed),
                      budget.abandoned_batches.load(std::memory_order_relaxed));
         } catch (...) {

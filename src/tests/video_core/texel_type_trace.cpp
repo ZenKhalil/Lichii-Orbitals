@@ -335,3 +335,135 @@ TEST_CASE("Uniform family assessment follows immutable bounded descriptor rows",
         CHECK(batch->rows[0].uniform_family.reason == Vulkan::UniformFamilyReason::Unknown);
     }
 }
+
+
+TEST_CASE("Texel shader filter strictly parses a bounded startup list",
+          "[video_core][texel_type_trace]") {
+    const auto absent = ParseShaderFilter(nullptr);
+    CHECK_FALSE(absent.present);
+    CHECK(absent.valid);
+    CHECK(absent.Accepts(0));
+    CHECK(absent.Accepts(~std::uint64_t{}));
+    const auto single = ParseShaderFilter("5BF5fe86e1f82d9a");
+    CHECK(single.valid);
+    CHECK(single.count == 1);
+    CHECK(single.Accepts(0x5bf5fe86e1f82d9a));
+    CHECK_FALSE(single.Accepts(0x3183b83b38829382));
+    const auto eight = ParseShaderFilter(
+        "0000000000000000,0000000000000001,0000000000000002,0000000000000003,"
+        "0000000000000004,0000000000000005,0000000000000006,ffffffffffffffff");
+    CHECK(eight.valid);
+    CHECK(eight.count == 8);
+    CHECK(eight.Accepts(0));
+    CHECK(eight.Accepts(~std::uint64_t{}));
+    for (const char* value : {
+             "", "1", "000000000000000", "00000000000000000", "0x00000000000000",
+             "000000000000000g", " 0000000000000000", "0000000000000000 ",
+             "0000000000000000,", ",0000000000000000", "0000000000000000,,0000000000000001",
+             "0000000000000000,0000000000000000", "ffffffffffffffff,FFFFFFFFFFFFFFFF",
+             "0000000000000000,0000000000000001,0000000000000002,0000000000000003,"
+             "0000000000000004,0000000000000005,0000000000000006,0000000000000007,0000000000000008"}) {
+        const auto invalid = ParseShaderFilter(value);
+        CHECK(invalid.present);
+        CHECK_FALSE(invalid.valid);
+        CHECK_FALSE(invalid.Accepts(0));
+        CHECK_FALSE(invalid.Accepts(0xffffffffffffffff));
+    }
+    // No terminator is needed beyond the bounded eighth separator. All fields are unique.
+    std::array<char, 136> nonterminated{};
+    for (std::size_t field = 0; field < 8; ++field) {
+        for (std::size_t digit = 0; digit < 16; ++digit) {
+            nonterminated[field * 17 + digit] = digit == 15 ? static_cast<char>('0' + field) : '0';
+        }
+        nonterminated[field * 17 + 16] = ',';
+    }
+    CHECK_FALSE(ParseShaderFilter(nonterminated.data()).valid);
+}
+
+TEST_CASE("Texel shader filter preserves target tickets before earlier controls",
+          "[video_core][texel_type_trace]") {
+    using VideoCore::Surface::PixelFormat;
+    const auto filter = ParseShaderFilter("5bf5fe86e1f82d9a");
+    const auto unrestricted = ParseShaderFilter(nullptr);
+    const auto invalid = ParseShaderFilter("");
+    constexpr std::uint64_t early_hash = 0x3183b83b38829382;
+    constexpr std::uint64_t target_hash = 0x5bf5fe86e1f82d9a;
+    int queue{};
+    Shader::Info info;
+    Shader::ImageBufferDescriptor desc{.format = Shader::ImageFormat::Typeless,
+                                      .is_written = true, .count = 1};
+    const Offsets offsets{.binding = 2, .entry = 3};
+    const auto capture = [&](Scope& scope, std::uint64_t hash) {
+        Capture(scope, info, Identity{.hash = hash, .stage = 5, .native = true}, offsets, desc,
+                0, 1, 1, PixelFormat::R32_FLOAT, PixelFormat::R32_FLOAT, 4096, 256, 0);
+    };
+    Budget filtered;
+    {
+        Scope scope{&queue, true, true, filtered, &filter};
+        for (std::uint32_t i = 0; i < 64; ++i) {
+            capture(scope, early_hash);
+        }
+        for (const auto& count : filtered.counts) {
+            CHECK(count.load() == 0);
+        }
+        CHECK_FALSE(Scope::SealCurrent());
+    }
+    {
+        Scope scope{&queue, true, true, filtered, &filter};
+        for (std::uint32_t i = 0; i < Budget::ControlLimit + 1; ++i) {
+            capture(scope, target_hash);
+        }
+        Scope::Host(&queue, 3, 99, 128, 256, 100);
+        const auto batch = Scope::SealCurrent();
+        REQUIRE(batch);
+        REQUIRE(batch->size == Budget::ControlLimit);
+        for (std::size_t i = 0; i < batch->size; ++i) {
+            CHECK(batch->rows[i].shader_hash == target_hash);
+            CHECK(batch->rows[i].ticket == i + 1);
+            CHECK(batch->rows[i].shader_filter_hashes == 1);
+            CHECK(batch->rows[i].host_observed);
+            CHECK(batch->rows[i].buffer_view == 99);
+            CHECK(batch->rows[i].host_offset == 128);
+            CHECK(batch->rows[i].host_size == 256);
+            CHECK(batch->rows[i].compiled == Numeric::Float);
+        }
+    }
+    Budget old_behavior;
+    {
+        Scope scope{&queue, true, true, old_behavior, &unrestricted};
+        for (std::uint32_t i = 0; i < Budget::ControlLimit; ++i) {
+            capture(scope, early_hash);
+        }
+        capture(scope, target_hash);
+        const auto batch = Scope::SealCurrent();
+        REQUIRE(batch);
+        CHECK(batch->size == Budget::ControlLimit);
+        CHECK(batch->rows[0].shader_hash == early_hash);
+        CHECK(batch->rows[0].shader_filter_hashes == 0);
+    }
+    for (const bool enabled : {false, true}) {
+        Budget rejected;
+        Scope scope{&queue, true, enabled, rejected, &invalid};
+        capture(scope, target_hash);
+        CHECK_FALSE(Scope::SealCurrent());
+        for (const auto& count : rejected.counts) {
+            CHECK(count.load() == 0);
+        }
+    }
+    Budget full;
+    {
+        Scope scope{&queue, true, true, full, &filter};
+        auto mismatch = MakeRow(Kind::Storage);
+        mismatch.stage = 5;
+        mismatch.shader_hash = target_hash;
+        for (std::size_t i = 0; i < Batch::RowLimit; ++i) {
+            scope.Add(mismatch);
+        }
+        mismatch.shader_hash = early_hash;
+        scope.Add(mismatch);
+        const auto batch = Scope::SealCurrent();
+        REQUIRE(batch);
+        CHECK(batch->size == Batch::RowLimit);
+        CHECK(batch->row_cap_hits == 0);
+    }
+}

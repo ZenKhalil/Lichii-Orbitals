@@ -29,6 +29,76 @@ inline bool Enabled() noexcept {
     return enabled;
 }
 
+// Matches the logged shader hash, not an auxiliary hash or pipeline key.
+// Absent is unrestricted; a malformed present value rejects all trace rows.
+struct ShaderFilter {
+    static constexpr std::size_t MaxHashes = 8;
+    std::array<std::uint64_t, MaxHashes> hashes{};
+    std::uint32_t count{};
+    bool present{};
+    bool valid{true};
+
+    constexpr bool Accepts(std::uint64_t hash) const noexcept {
+        if (!present) {
+            return true;
+        }
+        if (valid) {
+            for (std::uint32_t index = 0; index < count; ++index) {
+                if (hashes[index] == hash) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+};
+
+// At most eight 16-digit fields and seven commas: inspect at most 136 bytes,
+// including a terminator. No allocation or unbounded string operation.
+constexpr ShaderFilter ParseShaderFilter(const char* value) noexcept {
+    ShaderFilter result;
+    if (!value) {
+        return result;
+    }
+    result.present = true;
+    result.valid = false;
+    std::size_t position{};
+    for (std::size_t field = 0; field < ShaderFilter::MaxHashes; ++field) {
+        std::uint64_t hash{};
+        for (std::size_t digit = 0; digit < 16; ++digit) {
+            const char ch = value[position++];
+            const int nibble = ch >= '0' && ch <= '9' ? ch - '0'
+                             : ch >= 'a' && ch <= 'f' ? ch - 'a' + 10
+                             : ch >= 'A' && ch <= 'F' ? ch - 'A' + 10 : -1;
+            if (nibble < 0) {
+                return result;
+            }
+            hash = (hash << 4) | static_cast<std::uint64_t>(nibble);
+        }
+        for (std::uint32_t index = 0; index < result.count; ++index) {
+            if (result.hashes[index] == hash) {
+                return result;
+            }
+        }
+        result.hashes[result.count++] = hash;
+        const char separator = value[position++];
+        if (separator == '\0') {
+            result.valid = true;
+            return result;
+        }
+        if (separator != ',') {
+            return result;
+        }
+    }
+    return result;
+}
+
+inline const ShaderFilter& SelectedShaderFilter() noexcept {
+    static const ShaderFilter selected =
+        ParseShaderFilter(std::getenv("EDEN_NX2_TEXEL_TYPE_TRACE_SHADERS"));
+    return selected;
+}
+
 constexpr Numeric Classify(bool valid, bool integer, bool signed_integer) noexcept {
     return !valid ? Numeric::Unknown
                   : integer ? (signed_integer ? Numeric::Sint : Numeric::Uint) : Numeric::Float;
@@ -56,6 +126,7 @@ struct Row {
     std::uint64_t guest_address{};
     std::uint64_t buffer_view{}, host_offset{}, host_size{};
     std::size_t entry{};
+    std::uint32_t shader_filter_hashes{};
     std::uint32_t stage{}, binding{}, element{}, count{}, size_shift{};
     std::uint32_t cbuf{}, cbuf_offset{}, secondary_cbuf{}, secondary_offset{}, handle_program{};
     std::uint32_t requested_tic{}, resolved_tic{}, guest_format{}, selected_format{}, vk_format{};
@@ -123,9 +194,11 @@ inline thread_local Scope* current{};
 class Scope {
 public:
     explicit Scope(const void* queue, bool supported = true, bool enabled = Enabled(),
-                   Budget& budget_ = budget) noexcept
+                   Budget& budget_ = budget, const ShaderFilter* filter_override = nullptr) noexcept
         : previous{current}, queue_identity{queue}, owner_budget{budget_},
-          active{enabled && supported && budget_.Available()} {
+          active{enabled && supported && budget_.Available()},
+          shader_filter{active ? (filter_override ? filter_override : &SelectedShaderFilter())
+                               : nullptr} {
         current = active ? this : nullptr;
     }
 
@@ -155,6 +228,10 @@ public:
         if (!active) {
             return;
         }
+        if (shader_filter && !shader_filter->Accepts(row.shader_hash)) {
+            return;
+        }
+        row.shader_filter_hashes = shader_filter ? shader_filter->count : 0;
         if (batch && batch->size == Batch::RowLimit) {
             ++batch->row_cap_hits;
             return;
@@ -207,6 +284,8 @@ private:
     const void* queue_identity{};
     Budget& owner_budget;
     bool active{};
+    // Production points to immutable process storage. Test overrides must outlive this Scope.
+    const ShaderFilter* shader_filter{};
     std::shared_ptr<Batch> batch;
 };
 
