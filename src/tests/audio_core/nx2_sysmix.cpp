@@ -5,6 +5,7 @@
 #include <limits>
 #include <thread>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include "common/atomic_ops.h"
 #include "common/scope_exit.h"
 #include "core/core_timing.h"
@@ -297,7 +298,7 @@ TEST_CASE("sysmix validates the exact F32 ring allocation and rejects unsupporte
     REQUIRE(SysmixOutput::ValidateRegion(*context.process, Context::Base + 1,
                                          Context::Size, 0x24).IsFailure());
     REQUIRE(SysmixOutput::ValidateRegion(*context.process, Context::Base,
-                                         Context::Size, 4).IsFailure());
+                                         Context::Size, 0x84).IsFailure());
     SysmixOutput short_stream{context.system, *context.process, context.sink, 2, Context::Base,
                               0x5000, 0x24};
     REQUIRE(short_stream.Open(5, 2, 48000, 2048, 0, 0).IsFailure());
@@ -658,6 +659,7 @@ TEST_CASE("sysmix does not report successful disengage after backend stop failur
 
 TEST_CASE("sysmix six-channel float ring preserves wrapped frames and pads all channels",
           "[sysmix][surround]") {
+    const u32 creation_flags = GENERATE(4U, 0x24U);
     Context context;
     context.sink.host_channels = 6;
     constexpr u32 Slots = 512;
@@ -669,7 +671,7 @@ TEST_CASE("sysmix six-channel float ring preserves wrapped frames and pads all c
                                        first.data(), sizeof(first)));
     REQUIRE(context.Memory().WriteBlock(Context::Base + 0x1040, second.data(), sizeof(second)));
     SysmixOutput stream{context.system, *context.process, context.sink, 1,
-                        Context::Base, Context::Size, 0x24};
+                        Context::Base, Context::Size, creation_flags};
     REQUIRE(stream.Open(5, 6, 48000, Slots - 1, 0, 0).IsSuccess());
     REQUIRE(stream.SetGain(0.5f, 0).IsSuccess());
     REQUIRE(stream.SetEngaged(true).IsSuccess());
@@ -689,6 +691,7 @@ TEST_CASE("sysmix six-channel float ring preserves wrapped frames and pads all c
 
 TEST_CASE("sysmix six-channel PCM admission keeps frame cursors under backpressure",
           "[sysmix][surround]") {
+    const u32 creation_flags = GENERATE(4U, 0x24U);
     Context context;
     context.sink.host_channels = 6;
     constexpr u32 Frames = 240 * 4;
@@ -700,7 +703,7 @@ TEST_CASE("sysmix six-channel PCM admission keeps frame cursors under backpressu
     }
     REQUIRE(context.Memory().WriteBlock(Context::Base + 0x1040, input.data(), sizeof(input)));
     SysmixOutput stream{context.system, *context.process, context.sink, 1,
-                        Context::Base, Context::Size, 0x24};
+                        Context::Base, Context::Size, creation_flags};
     REQUIRE(stream.Open(2, 6, 48000, 1023, 0, 0).IsSuccess());
     REQUIRE(stream.SetEngaged(true).IsSuccess());
     for (int i = 0; i < 3; ++i) stream.Pump();
@@ -715,4 +718,81 @@ TEST_CASE("sysmix six-channel PCM admission keeps frame cursors under backpressu
         if (block == 0) stream.Pump();
     }
     REQUIRE(ReadCursor(context) == Frames);
+}
+
+TEST_CASE("sysmix creation flags retain exact direction and memory validation", "[sysmix][output_flags]") {
+    Context context;
+    for (u32 flags : {4U, 0x24U}) {
+        CHECK(SysmixOutput::ValidateRegion(*context.process, Context::Base, Context::Size, flags)
+                  .IsSuccess());
+        CHECK(SysmixOutput::ValidateRegion(*context.process, Context::Base + 1, Context::Size, flags)
+              == Service::Audio::ResultInvalidAddressInfo);
+        CHECK(SysmixOutput::ValidateRegion(*context.process, Context::Base, 0x1000, flags)
+              == Service::Audio::ResultInvalidAddressInfo);
+        CHECK(SysmixOutput::ValidateRegion(*context.process, Context::Base + Context::Size,
+                                          Context::Size, flags)
+              == Service::Audio::ResultInvalidAddressInfo);
+        CHECK(SysmixOutput::ValidateRegion(*context.process, Context::Base, Context::Size, flags, true)
+              == Service::Audio::ResultNotSupported);
+    }
+    for (u32 flags : {0U, 1U, 2U, 3U, 5U, 6U, 0x20U, 0x44U, 0x64U, 0x84U, 0xa4U, 0xffffffffU}) {
+        CHECK(SysmixOutput::ValidateRegion(*context.process, Context::Base, Context::Size, flags)
+              == Service::Audio::ResultNotSupported);
+    }
+    CHECK(SysmixOutput::ValidateRegion(*context.process, Context::Base, Context::Size, 2, true)
+              .IsSuccess());
+    CHECK(context.sink.last == nullptr);
+}
+
+TEST_CASE("sysmix six-channel output modes preserve admitted audio through detached purge",
+          "[sysmix][surround][output_flags][output_purge]") {
+    const u32 creation_flags = GENERATE(4U, 0x24U);
+    Context context;
+    context.sink.host_channels = 6;
+    constexpr u32 Slots = 512;
+    constexpr u32 Start = Slots - 1;
+    auto write_frames = [&](u32 start, u32 count, s16 base) {
+        for (u32 frame = 0; frame < count; ++frame) {
+            std::array<s16, 6> samples;
+            for (u32 channel = 0; channel < samples.size(); ++channel)
+                samples[channel] = static_cast<s16>(base + frame + channel * 1000);
+            REQUIRE(context.Memory().WriteBlock(Context::Base + 0x1040 +
+                        u64{(start + frame) % Slots} * sizeof(samples), samples.data(), sizeof(samples)));
+        }
+    };
+    Cursor(context, Start, 479);
+    write_frames(Start, 480, 100);
+    SysmixOutput stream{context.system, *context.process, context.sink, 1,
+                        Context::Base, Context::Size, creation_flags};
+    REQUIRE(stream.Open(2, 6, 48000, Slots - 1, 0, 0).IsSuccess());
+    REQUIRE(stream.SetDataNotification(2, Slots - 1).IsSuccess());
+    REQUIRE_FALSE(stream.GetDataEvent()->IsSignaled(context.system.Kernel()));
+    REQUIRE(stream.SetEngaged(true).IsSuccess());
+    stream.Pump();
+    REQUIRE(ReadCursor(context) == 239);
+    REQUIRE(context.sink.last->GetQueueSize() == 1);
+    REQUIRE(stream.SetEngaged(false).IsSuccess());
+    u32 purged{};
+    REQUIRE(stream.Purge(0, purged).IsSuccess());
+    REQUIRE(purged == 240);
+    REQUIRE(ReadCursor(context) == 479);
+    REQUIRE(context.sink.last->GetQueueSize() == 1);
+    REQUIRE(stream.GetDataEvent()->IsSignaled(context.system.Kernel()));
+    stream.Pump();
+    REQUIRE(stream.GetCounters().accepted_frames == 240);
+    write_frames(479, 240, 800);
+    const u32 write = 207;
+    REQUIRE(context.Memory().WriteBlock(Context::Base + 0x1004, &write, sizeof(write)));
+    REQUIRE(stream.SetEngaged(true).IsSuccess());
+    stream.Pump();
+    REQUIRE(ReadCursor(context) == write);
+    REQUIRE(stream.GetCounters().accepted_frames == 480);
+    REQUIRE(stream.GetCounters().faults == 0);
+    std::array<s16, 240 * 6> output;
+    for (s16 base : {100, 800}) {
+        context.sink.last->ProcessAudioOutAndRender(output, 240);
+        for (u32 frame = 0; frame < 240; ++frame)
+            for (u32 channel = 0; channel < 6; ++channel)
+                CHECK(output[frame * 6 + channel] == base + frame + channel * 1000);
+    }
 }

@@ -155,7 +155,10 @@ SysmixOutput::~SysmixOutput() = default;
 /// Validate direction-specific creation flags and an aligned, mapped guest ring allocation.
 Result SysmixOutput::ValidateRegion(Kernel::KProcess& process, u64 buffer, u64 size,
                                     u32 creation_flags, bool input) {
-    R_UNLESS(creation_flags == (input ? 2U : 0x24U), ResultNotSupported);
+    // Both observed output modes use the same shared ring; other flag combinations remain unsupported.
+    R_UNLESS(input ? creation_flags == 2U
+                   : (creation_flags == 4U || creation_flags == 0x24U),
+             ResultNotSupported);
     R_UNLESS(buffer != 0 && (buffer & 0xfff) == 0 && (size & 0xfff) == 0 && size >= 0x2000 &&
                  size <= std::numeric_limits<u64>::max() - buffer &&
                  process.GetMemory().IsValidVirtualAddressRange(buffer, size),
