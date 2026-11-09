@@ -15,6 +15,7 @@
 #include "video_core/nx2_perf.h"
 #include "video_core/nx2_profile.h"
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
+#include "video_core/renderer_vulkan/vk_buffer_transfer.h"
 #include "video_core/renderer_vulkan/vertex_repack.h"
 
 #include "video_core/renderer_vulkan/maxwell_to_vk.h"
@@ -105,6 +106,22 @@ vk::Buffer CreateBuffer(const Device& device, const MemoryAllocator& memory_allo
         buffer_ci, device.IsMoltenVK() ? MemoryUsage::Stream : MemoryUsage::DeviceLocal);
 }
 } // Anonymous namespace
+
+void BufferTransfer::RecordUploadCopy(vk::CommandBuffer upload_cmdbuf, VkBuffer src_buffer,
+                                      VkBuffer dst_buffer, std::span<const VkBufferCopy> copies,
+                                      bool barrier) {
+    if (barrier) {
+        const VkMemoryBarrier dependency{
+            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+            .pNext = nullptr,
+            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        };
+        upload_cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                      VK_PIPELINE_STAGE_TRANSFER_BIT, 0, dependency);
+    }
+    upload_cmdbuf.CopyBuffer(src_buffer, dst_buffer, copies);
+}
 
 Buffer::Buffer(BufferCacheRuntime& runtime, VideoCommon::NullBufferParams null_params)
     : VideoCommon::BufferBase(null_params), scheduler{&runtime.scheduler}, tracker{4096} {
@@ -549,9 +566,10 @@ void BufferCacheRuntime::CopyBuffer(VkBuffer dst_buffer, VkBuffer src_buffer,
     boost::container::small_vector<VkBufferCopy, 8> vk_copies(copies.size());
     std::ranges::transform(copies, vk_copies.begin(), MakeBufferCopy);
     if (src_buffer == staging_pool.StreamBuf() && can_reorder_upload) {
-        scheduler.RecordWithUploadBuffer([src_buffer, dst_buffer, vk_copies](
+        scheduler.RecordWithUploadBuffer([src_buffer, dst_buffer, vk_copies, barrier](
                                              vk::CommandBuffer, vk::CommandBuffer upload_cmdbuf) {
-            upload_cmdbuf.CopyBuffer(src_buffer, dst_buffer, vk_copies);
+            BufferTransfer::RecordUploadCopy(upload_cmdbuf, src_buffer, dst_buffer,
+                                             {vk_copies.data(), vk_copies.size()}, barrier);
         });
         return;
     }
