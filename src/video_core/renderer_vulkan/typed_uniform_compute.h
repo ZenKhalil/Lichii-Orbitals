@@ -10,6 +10,7 @@
 #include "shader_recompiler/frontend/ir/modifiers.h"
 #include "shader_recompiler/frontend/ir/program.h"
 #include "shader_recompiler/runtime_info.h"
+#include "video_core/renderer_vulkan/uniform_family_assessment.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
 namespace Vulkan {
@@ -39,22 +40,41 @@ inline std::optional<Shader::UniformTexelType> ComputeUniformType(
 
 // Only the uniform declaration is specialized. Other images and their atomics
 // retain their instructions, types and bindings, checked through complete replay.
-inline bool IsSingleComputeUniformFetch(const Shader::IR::Program& program) {
+inline UniformFamilyReason ComputeUniformFetchReason(
+    const Shader::IR::Program& program, std::uint32_t* offending_opcode = nullptr) {
     using namespace Shader;
+    using Reason = UniformFamilyReason;
+    if (offending_opcode) {
+        *offending_opcode = ~std::uint32_t{};
+    }
     const auto& info = program.info;
-    if (program.stage != Stage::Compute || info.is_task || info.is_mesh ||
-        info.texture_buffer_descriptors.size() != 1) {
-        return false;
+    if (program.stage != Stage::Compute) {
+        return Reason::Stage;
+    }
+    if (info.is_task || info.is_mesh) {
+        return Reason::TaskOrMesh;
+    }
+    if (info.texture_buffer_descriptors.size() != 1) {
+        return Reason::DeclarationCount;
     }
     const auto& desc = info.texture_buffer_descriptors.front();
-    if (desc.count != 1 || desc.handle_program != ~u32{} || desc.has_secondary) {
-        return false;
+    if (desc.count != 1) {
+        return Reason::DescriptorCount;
+    }
+    if (desc.handle_program != ~u32{}) {
+        return Reason::ComputedHandle;
+    }
+    if (desc.has_secondary) {
+        return Reason::SecondaryHandle;
     }
     bool fetch{};
     for (const auto* block : program.blocks) {
         for (const auto& inst : block->Instructions()) {
             if (inst.GetOpcode() == IR::Opcode::GetSparseFromOp) {
-                return false;
+                if (offending_opcode) {
+                    *offending_opcode = static_cast<std::uint32_t>(inst.GetOpcode());
+                }
+                return Reason::Sparse;
             }
             switch (inst.GetOpcode()) {
             case IR::Opcode::ImageSampleImplicitLod:
@@ -66,7 +86,10 @@ inline bool IsSingleComputeUniformFetch(const Shader::IR::Program& program) {
             case IR::Opcode::ImageGradient:
             case IR::Opcode::ImageQueryLod:
                 if (inst.Flags<IR::TextureInstInfo>().type == TextureType::Buffer) {
-                    return false;
+                    if (offending_opcode) {
+                        *offending_opcode = static_cast<std::uint32_t>(inst.GetOpcode());
+                    }
+                    return Reason::BufferSampleOperation;
                 }
                 break;
             default:
@@ -81,11 +104,18 @@ inline bool IsSingleComputeUniformFetch(const Shader::IR::Program& program) {
                 continue;
             }
             if (flags.descriptor_index != 0) {
-                return false;
+                if (offending_opcode) {
+                    *offending_opcode = static_cast<std::uint32_t>(inst.GetOpcode());
+                }
+                return Reason::DescriptorIndex;
             }
             fetch |= inst.GetOpcode() == IR::Opcode::ImageFetch;
         }
     }
-    return fetch;
+    return fetch ? Reason::Eligible : Reason::MissingFetch;
+}
+
+inline bool IsSingleComputeUniformFetch(const Shader::IR::Program& program) {
+    return ComputeUniformFetchReason(program) == UniformFamilyReason::Eligible;
 }
 } // namespace Vulkan

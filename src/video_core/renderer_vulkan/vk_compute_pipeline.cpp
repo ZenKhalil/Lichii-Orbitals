@@ -213,11 +213,13 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
                                  VideoCore::ShaderNotify* shader_notify, const Shader::Info& info_,
                                  vk::ShaderModule spv_module_, u64 shader_hash_,
                                  std::optional<Shader::ImageBufferStoreType> store_type_,
-                                 std::optional<Shader::UniformTexelType> uniform_type_)
+                                 std::optional<Shader::UniformTexelType> uniform_type_,
+                                 UniformFamilyAssessment uniform_assessment_)
     : device{device_},
       pipeline_cache(pipeline_cache_), guest_descriptor_queue{guest_descriptor_queue_},
       descriptor_buffer_ring{descriptor_buffer_ring_}, info{info_},
-      shader_hash{shader_hash_}, store_type{store_type_}, uniform_type{uniform_type_},
+      shader_hash{shader_hash_}, uniform_assessment{uniform_assessment_},
+      store_type{store_type_}, uniform_type{uniform_type_},
       spv_module(std::move(spv_module_)) {
     if (store_type && uniform_type) {
         throw Shader::LogicError("Compute families must have exactly one specialization kind");
@@ -470,6 +472,7 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
                                 std::optional<ByteAddressedShadow>& shadow,
                                 BindCommand* deferred_bind, ComputePipeline** selected_pipeline) {
     TexelTypeTrace::Scope texel_trace{&guest_descriptor_queue};
+    texel_trace.SetUniformFamilyAssessment(&uniform_assessment);
     ComputePipeline* selected = this;
     if (selected_pipeline) {
         *selected_pipeline = this;

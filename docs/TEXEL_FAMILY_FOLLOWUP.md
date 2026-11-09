@@ -49,3 +49,24 @@ an execution of the renderer's Device, Configure or retirement machinery.
 Vulkan references: [uniform texel descriptors](https://docs.vulkan.org/spec/latest/chapters/descriptors.html),
 [R16 format definition](https://docs.vulkan.org/spec/latest/chapters/formats.html),
 and [image-read conversion](https://docs.vulkan.org/spec/latest/chapters/images.html).
+
+## Bounded family assessment
+
+The existing exact `EDEN_NX2_TEXEL_TYPE_TRACE=1` opt-in adds the first family
+exclusion reason, assessed stage, declaration/target count, offending opcode when
+applicable, feature mask, snapshot and construction status to its existing bounded
+Configure rows. The pipeline owns the assessment; each queued immutable batch
+contains value copies, not a pointer back to compiler or pipeline state.
+
+The assessed stage is distinct from the descriptor row stage: 0 denotes the
+emitted graphics vertex slot, 5 compute. Local policy eligibility can be true even
+when an outer construction, feature or snapshot gate prevents a family. An
+unobserved assessment is unknown. First reason is not an exhaustive inventory.
+Existing control/mismatch quotas and row limits remain; absent later records do
+not establish compatibility. Store families may carry unknown uniform assessment.
+No new guest reads, format queries, GPU commands or waits are added by this
+metadata. Disabled diagnostics still have small object/Scope field overhead.
+
+Five trace cases passed with the environment both absent and enabled; tests cover
+immutable row copies, stage identity, disabled/unknown transport and existing
+bounded budgets. They do not execute the real logger or driver construction path.

@@ -10,6 +10,7 @@
 #include "shader_recompiler/frontend/ir/program.h"
 #include "shader_recompiler/frontend/ir/modifiers.h"
 #include "shader_recompiler/runtime_info.h"
+#include "video_core/renderer_vulkan/uniform_family_assessment.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
 namespace Vulkan {
@@ -29,24 +30,70 @@ inline std::optional<Shader::UniformTexelType> TypedUniformType(
 
 // Deliberately one native VertexB declaration. Emitted stage 0 alone is not
 // enough: VertexA and task/mesh programs can also occupy that renderer slot.
-inline bool IsSingleVertexUniformFetch(const Shader::IR::Program& program) {
+inline UniformFamilyReason VertexUniformFetchReason(
+    const Shader::IR::Program& program, UniformFamilyAssessment* assessment = nullptr) {
+    using Reason = UniformFamilyReason;
     const auto& info = program.info;
-    if (program.stage != Shader::Stage::VertexB || info.is_task || info.is_mesh ||
-        info.requires_layer_emulation || info.texture_buffer_descriptors.size() != 1 ||
-        !info.image_buffer_descriptors.empty() || !info.texture_descriptors.empty() ||
-        !info.image_descriptors.empty() || !info.handle_programs.empty()) {
-        return false;
+    if (assessment) {
+        *assessment = {};
+        assessment->observed = true;
+        assessment->assessed_stage = 0;
+        assessment->policy_evaluated = true;
+        assessment->declaration_count = static_cast<u32>(info.texture_buffer_descriptors.size());
+        if (info.texture_buffer_descriptors.size() == 1) {
+            assessment->target_count = info.texture_buffer_descriptors.front().count;
+        }
+    }
+    const auto finish = [&](Reason reason, u32 opcode = ~u32{}) {
+        if (assessment) {
+            assessment->reason = reason;
+            assessment->policy_eligible = reason == Reason::Eligible;
+            assessment->offending_opcode = opcode;
+        }
+        return reason;
+    };
+    if (program.stage != Shader::Stage::VertexB) {
+        return finish(Reason::Stage);
+    }
+    if (info.is_task || info.is_mesh) {
+        return finish(Reason::TaskOrMesh);
+    }
+    if (info.requires_layer_emulation) {
+        return finish(Reason::LayerEmulation);
+    }
+    if (info.texture_buffer_descriptors.size() != 1) {
+        return finish(Reason::DeclarationCount);
+    }
+    if (!info.image_buffer_descriptors.empty()) {
+        return finish(Reason::StorageImageDeclarations);
+    }
+    if (!info.texture_descriptors.empty()) {
+        return finish(Reason::TextureDeclarations);
+    }
+    if (!info.image_descriptors.empty()) {
+        return finish(Reason::ImageDeclarations);
+    }
+    if (!info.handle_programs.empty()) {
+        return finish(Reason::HandlePrograms);
     }
     const auto& descriptor = info.texture_buffer_descriptors.front();
-    if (descriptor.count != 1 || descriptor.handle_program != ~u32{} ||
-        descriptor.has_secondary) {
-        return false;
+    if (descriptor.count != 1) {
+        return finish(Reason::DescriptorCount);
+    }
+    if (descriptor.handle_program != ~u32{}) {
+        return finish(Reason::ComputedHandle);
+    }
+    if (descriptor.has_secondary) {
+        return finish(Reason::SecondaryHandle);
     }
     bool fetch{};
     for (const auto* block : program.blocks) {
         for (const auto& inst : block->Instructions()) {
-            switch (inst.GetOpcode()) {
+            const auto opcode = inst.GetOpcode();
+            const auto encoded = static_cast<u32>(opcode);
+            switch (opcode) {
             case Shader::IR::Opcode::GetSparseFromOp:
+                return finish(Reason::Sparse, encoded);
             case Shader::IR::Opcode::ImageSampleImplicitLod:
             case Shader::IR::Opcode::ImageSampleExplicitLod:
             case Shader::IR::Opcode::ImageSampleDrefImplicitLod:
@@ -55,29 +102,34 @@ inline bool IsSingleVertexUniformFetch(const Shader::IR::Program& program) {
             case Shader::IR::Opcode::ImageGatherDref:
             case Shader::IR::Opcode::ImageGradient:
             case Shader::IR::Opcode::ImageQueryLod:
+                return finish(Reason::BufferSampleOperation, encoded);
             case Shader::IR::Opcode::ImageRead:
             case Shader::IR::Opcode::ImageWrite:
-                return false;
+                return finish(Reason::OtherImageOperation, encoded);
             default:
                 break;
             }
-            if (inst.GetOpcode() == Shader::IR::Opcode::ImageQueryDimensions) {
-                const auto flags = inst.Flags<Shader::IR::TextureInstInfo>();
-                if (flags.type != Shader::TextureType::Buffer || flags.descriptor_index != 0) {
-                    return false;
-                }
-            }
-            if (inst.GetOpcode() != Shader::IR::Opcode::ImageFetch) {
+            if (opcode != Shader::IR::Opcode::ImageQueryDimensions &&
+                opcode != Shader::IR::Opcode::ImageFetch) {
                 continue;
             }
             const auto flags = inst.Flags<Shader::IR::TextureInstInfo>();
-            if (flags.type != Shader::TextureType::Buffer || flags.descriptor_index != 0) {
-                return false;
+            if (flags.type != Shader::TextureType::Buffer) {
+                return finish(Reason::NonBufferOperation, encoded);
             }
-            fetch = true;
+            if (flags.descriptor_index != 0) {
+                return finish(Reason::DescriptorIndex, encoded);
+            }
+            if (opcode == Shader::IR::Opcode::ImageFetch) {
+                fetch = true;
+            }
         }
     }
-    return fetch;
+    return finish(fetch ? Reason::Eligible : Reason::MissingFetch);
+}
+
+inline bool IsSingleVertexUniformFetch(const Shader::IR::Program& program) {
+    return VertexUniformFetchReason(program) == UniformFamilyReason::Eligible;
 }
 
 } // namespace Vulkan

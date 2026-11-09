@@ -532,6 +532,9 @@ template <typename Spec>
 bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
     TexelTypeTrace::Scope texel_trace{&guest_descriptor_queue,
                                     !IsMeshPipeline() && !IsEmulatedMesh()};
+    if (texel_trace.Active()) {
+        texel_trace.SetUniformFamilyAssessment(&uniform_assessment);
+    }
     GraphicsPipeline* selected = this;
     boost::container::small_vector<VideoCommon::ImageViewInOut, 160> views;
     boost::container::small_vector<VideoCommon::SamplerId, 96> samplers;

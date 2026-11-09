@@ -12,6 +12,8 @@
 #include <type_traits>
 #include <utility>
 
+#include "video_core/renderer_vulkan/uniform_family_assessment.h"
+
 namespace Vulkan::TexelTypeTrace {
 
 enum class Numeric : std::uint32_t { Unknown, Float, Uint, Sint };
@@ -46,6 +48,7 @@ std::uint64_t Handle(T value) noexcept {
 }
 
 struct Row {
+    UniformFamilyAssessment uniform_family{};
     Kind kind{};
     Numeric compiled{}, guest_class{}, selected_class{};
     HandleSource handle_source{};
@@ -140,6 +143,14 @@ public:
         return active;
     }
 
+    // The pointed-to pipeline assessment remains immutable throughout Configure.
+    // Add copies it into each owned row before the batch can cross threads.
+    void SetUniformFamilyAssessment(const UniformFamilyAssessment* value) noexcept {
+        if (active) {
+            uniform_assessment = value;
+        }
+    }
+
     void Add(Row row) noexcept {
         if (!active) {
             return;
@@ -147,6 +158,9 @@ public:
         if (batch && batch->size == Batch::RowLimit) {
             ++batch->row_cap_hits;
             return;
+        }
+        if (uniform_assessment) {
+            row.uniform_family = *uniform_assessment;
         }
         row.mismatch = Mismatch(row.compiled, row.selected_class);
         if (!owner_budget.Reserve(row)) {
@@ -189,6 +203,7 @@ public:
 
 private:
     Scope* previous{};
+    const UniformFamilyAssessment* uniform_assessment{};
     const void* queue_identity{};
     Budget& owner_budget;
     bool active{};

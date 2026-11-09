@@ -206,6 +206,10 @@ TEST_CASE("Compute uniform eligibility retains unrelated image atomics",
     REQUIRE(fixture.program.info.image_buffer_descriptors.size() == 1);
     REQUIRE(fixture.fetch->GetOpcode() == IR::Opcode::ImageFetch);
     CHECK(Vulkan::IsSingleComputeUniformFetch(fixture.program));
+    std::uint32_t reused_opcode = static_cast<std::uint32_t>(IR::Opcode::ImageQueryLod);
+    CHECK(Vulkan::ComputeUniformFetchReason(fixture.program, &reused_opcode) ==
+          Vulkan::UniformFamilyReason::Eligible);
+    CHECK(reused_opcode == ~std::uint32_t{});
     CHECK_FALSE(IsSingleTypelessBufferStore(fixture.program));
     for (u32 mutation = 0; mutation < 10; ++mutation) {
         MixedProgram changed{input};
@@ -253,6 +257,24 @@ TEST_CASE("Compute uniform eligibility retains unrelated image atomics",
         }
         CAPTURE(mutation);
         CHECK_FALSE(Vulkan::IsSingleComputeUniformFetch(changed.program));
+        using Reason = Vulkan::UniformFamilyReason;
+        constexpr std::array reasons{
+            Reason::Stage, Reason::DescriptorCount, Reason::ComputedHandle,
+            Reason::SecondaryHandle, Reason::DeclarationCount, Reason::MissingFetch,
+            Reason::DescriptorIndex, Reason::Sparse, Reason::TaskOrMesh,
+            Reason::BufferSampleOperation};
+        std::uint32_t offending_opcode = 123;
+        CHECK(Vulkan::ComputeUniformFetchReason(changed.program, &offending_opcode) ==
+              reasons[mutation]);
+        if (mutation == 6) {
+            CHECK(offending_opcode == static_cast<std::uint32_t>(IR::Opcode::ImageFetch));
+        } else if (mutation == 7) {
+            CHECK(offending_opcode == static_cast<std::uint32_t>(IR::Opcode::GetSparseFromOp));
+        } else if (mutation == 9) {
+            CHECK(offending_opcode == static_cast<std::uint32_t>(IR::Opcode::ImageQueryLod));
+        } else {
+            CHECK(offending_opcode == ~std::uint32_t{});
+        }
     }
 }
 

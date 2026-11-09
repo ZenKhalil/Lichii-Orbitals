@@ -336,3 +336,165 @@ TEST_CASE("Vertex uniform format selection uses exact supported host numeric cla
     CHECK_FALSE(Vulkan::TypedUniformType(VK_FORMAT_R32_SINT, no_signed));
     CHECK(Vulkan::TypedUniformType(VK_FORMAT_R32_UINT, no_signed) == Shader::UniformTexelType::Uint);
 }
+
+TEST_CASE("Vertex uniform assessment preserves policy and explains first exclusion",
+          "[graphics_input_capture][typed_uniform_buffer]") {
+    using Reason = Vulkan::UniformFamilyReason;
+    Shader::ObjectPool<Shader::IR::Inst> pool;
+    Shader::IR::Block block{pool};
+    Shader::IR::Program program;
+    program.stage = Shader::Stage::VertexB;
+    program.blocks = {&block};
+    Shader::TextureBufferDescriptor descriptor{};
+    descriptor.count = 1;
+    program.info.texture_buffer_descriptors.push_back(descriptor);
+    Shader::IR::IREmitter ir{block};
+    Shader::IR::TextureInstInfo flags{};
+    flags.type.Assign(Shader::TextureType::Buffer);
+    const auto fetch = ir.ImageFetch(ir.Imm32(0), ir.Imm32(2), {}, ir.Imm32(0),
+                                    Shader::IR::U32{}, flags);
+    fetch.InstRecursive()->ReplaceOpcode(Shader::IR::Opcode::ImageFetch);
+    Reason expected = Reason::Eligible;
+    u32 offending = ~u32{};
+    SECTION("Eligible has no construction claim") {
+        // Leave the positive program unchanged; reset stale assessment fields below.
+    }
+    SECTION("VertexA") {
+        program.stage = Shader::Stage::VertexA;
+        expected = Reason::Stage;
+    }
+    SECTION("Task") {
+        program.info.is_task = true;
+        expected = Reason::TaskOrMesh;
+    }
+    SECTION("Mesh") {
+        program.info.is_mesh = true;
+        expected = Reason::TaskOrMesh;
+    }
+    SECTION("Layer") {
+        program.info.requires_layer_emulation = true;
+        expected = Reason::LayerEmulation;
+    }
+    SECTION("No declaration") {
+        program.info.texture_buffer_descriptors.clear();
+        expected = Reason::DeclarationCount;
+    }
+    SECTION("Multiple declarations") {
+        program.info.texture_buffer_descriptors.push_back(descriptor);
+        expected = Reason::DeclarationCount;
+    }
+    SECTION("Storage image declaration") {
+        program.info.image_buffer_descriptors.emplace_back();
+        expected = Reason::StorageImageDeclarations;
+    }
+    SECTION("Ordinary texture declaration") {
+        program.info.texture_descriptors.emplace_back();
+        expected = Reason::TextureDeclarations;
+    }
+    SECTION("Ordinary image declaration") {
+        program.info.image_descriptors.emplace_back();
+        expected = Reason::ImageDeclarations;
+    }
+    SECTION("Handle program") {
+        program.info.handle_programs.emplace_back();
+        expected = Reason::HandlePrograms;
+    }
+    SECTION("Descriptor array") {
+        program.info.texture_buffer_descriptors[0].count = 2;
+        expected = Reason::DescriptorCount;
+    }
+    SECTION("Computed handle") {
+        program.info.texture_buffer_descriptors[0].handle_program = 0;
+        expected = Reason::ComputedHandle;
+    }
+    SECTION("Secondary handle") {
+        program.info.texture_buffer_descriptors[0].has_secondary = true;
+        expected = Reason::SecondaryHandle;
+    }
+    SECTION("First metadata failure wins") {
+        program.stage = Shader::Stage::VertexA;
+        program.info.texture_buffer_descriptors[0].has_secondary = true;
+        expected = Reason::Stage;
+    }
+    SECTION("Missing fetch") {
+        program.blocks.clear();
+        expected = Reason::MissingFetch;
+    }
+    SECTION("Descriptor index") {
+        flags.descriptor_index.Assign(1);
+        fetch.InstRecursive()->SetFlags(flags);
+        expected = Reason::DescriptorIndex;
+        offending = static_cast<u32>(Shader::IR::Opcode::ImageFetch);
+    }
+    SECTION("Non-buffer fetch") {
+        flags.type.Assign(Shader::TextureType::Color2D);
+        fetch.InstRecursive()->SetFlags(flags);
+        expected = Reason::NonBufferOperation;
+        offending = static_cast<u32>(Shader::IR::Opcode::ImageFetch);
+    }
+    SECTION("Sparse") {
+        static_cast<void>(ir.GetSparseFromOp(fetch));
+        expected = Reason::Sparse;
+        offending = static_cast<u32>(Shader::IR::Opcode::GetSparseFromOp);
+    }
+    SECTION("Sample opcode") {
+        fetch.InstRecursive()->ReplaceOpcode(Shader::IR::Opcode::ImageSampleImplicitLod);
+        expected = Reason::BufferSampleOperation;
+        offending = static_cast<u32>(Shader::IR::Opcode::ImageSampleImplicitLod);
+    }
+    SECTION("Image write opcode") {
+        fetch.InstRecursive()->ReplaceOpcode(Shader::IR::Opcode::ImageWrite);
+        expected = Reason::OtherImageOperation;
+        offending = static_cast<u32>(Shader::IR::Opcode::ImageWrite);
+    }
+    SECTION("Image read opcode remains distinct") {
+        fetch.InstRecursive()->ReplaceOpcode(Shader::IR::Opcode::ImageRead);
+        expected = Reason::OtherImageOperation;
+        offending = static_cast<u32>(Shader::IR::Opcode::ImageRead);
+    }
+    SECTION("Gather opcode remains distinct") {
+        fetch.InstRecursive()->ReplaceOpcode(Shader::IR::Opcode::ImageGather);
+        expected = Reason::BufferSampleOperation;
+        offending = static_cast<u32>(Shader::IR::Opcode::ImageGather);
+    }
+    SECTION("Dimensions without a fetch remain excluded") {
+        fetch.InstRecursive()->ReplaceOpcode(Shader::IR::Opcode::ImageQueryDimensions);
+        expected = Reason::MissingFetch;
+    }
+    SECTION("Dimension descriptor index") {
+        fetch.InstRecursive()->ReplaceOpcode(Shader::IR::Opcode::ImageQueryDimensions);
+        flags.descriptor_index.Assign(1);
+        fetch.InstRecursive()->SetFlags(flags);
+        expected = Reason::DescriptorIndex;
+        offending = static_cast<u32>(Shader::IR::Opcode::ImageQueryDimensions);
+    }
+    SECTION("Non-buffer dimensions") {
+        fetch.InstRecursive()->ReplaceOpcode(Shader::IR::Opcode::ImageQueryDimensions);
+        flags.type.Assign(Shader::TextureType::Color2D);
+        fetch.InstRecursive()->SetFlags(flags);
+        expected = Reason::NonBufferOperation;
+        offending = static_cast<u32>(Shader::IR::Opcode::ImageQueryDimensions);
+    }
+    Vulkan::UniformFamilyAssessment assessment;
+    assessment.family_built = true;
+    assessment.features_queried = true;
+    assessment.supported_format_mask = 7;
+    CHECK(Vulkan::VertexUniformFetchReason(program, &assessment) == expected);
+    CHECK(Vulkan::VertexUniformFetchReason(program) == expected);
+    CHECK(Vulkan::IsSingleVertexUniformFetch(program) == (expected == Reason::Eligible));
+    CHECK(assessment.reason == expected);
+    CHECK(assessment.observed);
+    CHECK(assessment.assessed_stage == 0);
+    CHECK(assessment.policy_evaluated);
+    CHECK(assessment.policy_eligible == (expected == Reason::Eligible));
+    CHECK(assessment.declaration_count == program.info.texture_buffer_descriptors.size());
+    CHECK(assessment.target_count ==
+          (program.info.texture_buffer_descriptors.size() == 1
+               ? program.info.texture_buffer_descriptors[0].count
+               : 0));
+    CHECK(assessment.offending_opcode == offending);
+    CHECK_FALSE(assessment.features_queried);
+    CHECK_FALSE(assessment.snapshot_available);
+    CHECK_FALSE(assessment.family_built);
+    CHECK(assessment.supported_format_mask == 0);
+}

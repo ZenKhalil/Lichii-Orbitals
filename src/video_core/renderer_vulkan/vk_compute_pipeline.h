@@ -23,6 +23,7 @@
 #include "shader_recompiler/runtime_info.h"
 #include "video_core/renderer_vulkan/pipeline_helper.h"
 #include "video_core/renderer_vulkan/typed_uniform_compute.h"
+#include "video_core/renderer_vulkan/uniform_family_assessment.h"
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
 #include "video_core/renderer_vulkan/vk_descriptor_buffer.h"
 #include "video_core/renderer_vulkan/vk_descriptor_pool.h"
@@ -51,7 +52,8 @@ public:
                              VideoCore::ShaderNotify* shader_notify, const Shader::Info& info,
                              vk::ShaderModule spv_module, u64 shader_hash,
                              std::optional<Shader::ImageBufferStoreType> store_type = std::nullopt,
-                             std::optional<Shader::UniformTexelType> uniform_type = std::nullopt);
+                             std::optional<Shader::UniformTexelType> uniform_type = std::nullopt,
+                             UniformFamilyAssessment uniform_assessment = {});
 
     ComputePipeline& operator=(ComputePipeline&&) noexcept = delete;
     ComputePipeline(ComputePipeline&&) noexcept = delete;
@@ -136,6 +138,7 @@ private:
     DescriptorBufferRing& descriptor_buffer_ring;
     Shader::Info info;
     u64 shader_hash{};
+    const UniformFamilyAssessment uniform_assessment;
     std::optional<Shader::ImageBufferStoreType> store_type;
     std::array<std::unique_ptr<ComputePipeline>, 3> store_family;
     std::array<bool, 4> store_formats{};

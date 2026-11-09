@@ -290,3 +290,48 @@ TEST_CASE("Texel metadata follows actual declaration and payload indexing",
         }
     }
 }
+
+TEST_CASE("Uniform family assessment follows immutable bounded descriptor rows",
+          "[video_core][texel_type_trace]") {
+    Budget local;
+    int queue{};
+    Vulkan::UniformFamilyAssessment assessment;
+    assessment.observed = true;
+    assessment.assessed_stage = 0;
+    assessment.policy_evaluated = true;
+    assessment.reason = Vulkan::UniformFamilyReason::DeclarationCount;
+    assessment.declaration_count = 2;
+    std::shared_ptr<const Batch> sealed;
+    {
+        Scope scope{&queue, true, true, local};
+        scope.SetUniformFamilyAssessment(&assessment);
+        auto row = MakeRow(Kind::Uniform);
+        row.stage = 5;
+        scope.Add(row);
+        sealed = Scope::SealCurrent();
+        REQUIRE(sealed);
+        assessment.reason = Vulkan::UniformFamilyReason::Eligible;
+        scope.Add(row);
+        CHECK(sealed->size == 1);
+        CHECK(sealed->rows[0].uniform_family.reason ==
+              Vulkan::UniformFamilyReason::DeclarationCount);
+        CHECK(sealed->rows[0].uniform_family.declaration_count == 2);
+        CHECK(sealed->rows[0].stage == 5);
+        CHECK(sealed->rows[0].uniform_family.assessed_stage == 0);
+        CHECK(sealed->rows[0].ticket == 1);
+    }
+    {
+        Scope disabled{&queue, true, false, local};
+        disabled.SetUniformFamilyAssessment(&assessment);
+        disabled.Add(MakeRow(Kind::Uniform));
+        CHECK_FALSE(Scope::SealCurrent());
+    }
+    {
+        Scope unknown{&queue, true, true, local};
+        unknown.Add(MakeRow(Kind::Uniform));
+        const auto batch = Scope::SealCurrent();
+        REQUIRE(batch);
+        CHECK_FALSE(batch->rows[0].uniform_family.observed);
+        CHECK(batch->rows[0].uniform_family.reason == Vulkan::UniformFamilyReason::Unknown);
+    }
+}

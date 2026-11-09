@@ -39,6 +39,11 @@ void Report(const std::shared_ptr<const Batch>& batch, std::uint64_t pipeline, b
                      "guest_address={:#x} guest_size={:#x} host_observed={} view={:#x} "
                      "bind_offset={:#x} bind_size={:#x} read={} written={} "
                      "atomic_descriptor=unknown image_atomic_stage={} "
+                     "uniform_family_observed={} uniform_assessed_stage={} uniform_family_reason={} "
+                     "uniform_policy_evaluated={} uniform_policy_eligible={} "
+                     "uniform_declarations={} uniform_target_count={} uniform_offending_opcode={} "
+                     "uniform_features_queried={} uniform_format_mask={:#x} "
+                     "uniform_snapshot={} uniform_family_built={} "
                      "budget={}/{} row_cap={} row_cap_hits={} allocation_failures={} "
                      "abandoned_batches={} coverage=bounded_configure_not_execution",
                      pipeline, usable, descriptor_buffer,
@@ -52,6 +57,13 @@ void Report(const std::shared_ptr<const Batch>& batch, std::uint64_t pipeline, b
                      Name(row.selected_class), row.selected_format, row.vk_format, row.mismatch,
                      row.guest_address, row.guest_size, row.host_observed, row.buffer_view,
                      row.host_offset, row.host_size, row.read, row.written, row.stage_image_atomic,
+                     row.uniform_family.observed, row.uniform_family.assessed_stage,
+                     UniformFamilyReasonName(row.uniform_family.reason),
+                     row.uniform_family.policy_evaluated, row.uniform_family.policy_eligible,
+                     row.uniform_family.declaration_count, row.uniform_family.target_count,
+                     row.uniform_family.offending_opcode,
+                     row.uniform_family.features_queried, row.uniform_family.supported_format_mask,
+                     row.uniform_family.snapshot_available, row.uniform_family.family_built,
                      row.ticket, row.limit, Batch::RowLimit, batch->row_cap_hits,
                      budget.allocation_failures.load(std::memory_order_relaxed),
                      budget.abandoned_batches.load(std::memory_order_relaxed));
