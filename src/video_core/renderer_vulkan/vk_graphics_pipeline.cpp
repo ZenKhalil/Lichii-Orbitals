@@ -685,7 +685,7 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
                             texel_trace, stage_infos[stage], identity, trace_offsets, desc, i,
                             texture_buffer_it->index,
                             Tegra::Texture::TextureHeaderIndex(texture_buffer_it->index,
-                                                               regs.tic.limit,
+                                                               regs.tex_header.limit,
                                                                gpu_memory->UsesNativeTiling()),
                             image_view.format, format, image_view.GpuAddr(), image_view.BufferSize(),
                             static_cast<u32>(image_view.type));
