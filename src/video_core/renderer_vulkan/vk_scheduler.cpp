@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <chrono>
+#include <array>
 #include <cstdlib>
 #include <memory>
 #include <algorithm>
@@ -45,6 +46,43 @@ std::atomic<u64> g_profile_finish_ns{};
 std::atomic<u64> g_profile_window_start{};
 std::mutex g_profile_end_mutex;
 std::map<std::string, u64> g_profile_ends;
+
+struct FinishSite {
+    std::string_view file;
+    u32 line{};
+    u64 count{};
+    u64 elapsed_ns{};
+    u64 max_ns{};
+};
+constexpr size_t MaxFinishSites = 128;
+std::mutex g_profile_finish_mutex;
+std::array<FinishSite, MaxFinishSites + 1> g_profile_finish_sites;
+size_t g_profile_finish_site_count{};
+
+void CountFinish(std::source_location location, u64 elapsed_ns) {
+    std::scoped_lock lock{g_profile_finish_mutex};
+    const std::string_view file{location.file_name()};
+    size_t index{};
+    for (; index < g_profile_finish_site_count; ++index) {
+        if (g_profile_finish_sites[index].file == file &&
+            g_profile_finish_sites[index].line == location.line()) {
+            break;
+        }
+    }
+    if (index == g_profile_finish_site_count && index < MaxFinishSites) {
+        // source_location strings have static storage; no caller-name allocation is needed.
+        g_profile_finish_sites[index].file = file;
+        g_profile_finish_sites[index].line = location.line();
+        ++g_profile_finish_site_count;
+    }
+    auto& site = g_profile_finish_sites[index];
+    if (index == MaxFinishSites) {
+        site.file = "other (site limit)";
+    }
+    ++site.count;
+    site.elapsed_ns += elapsed_ns;
+    site.max_ns = std::max(site.max_ns, elapsed_ns);
+}
 
 void CountRenderPassEnd(const char* file, u32 line) {
     if (!VideoCommon::Nx2Profile::Enabled()) {
@@ -89,6 +127,36 @@ void ReportSubmitCounts() {
     for (size_t i = 0; i < ends.size() && i < 16; ++i) {
         LOG_INFO(Render_Vulkan, "Render pass ends {:.0f}/s at {}",
                  static_cast<double>(ends[i].first) / seconds, ends[i].second);
+    }
+    std::array<FinishSite, MaxFinishSites + 1> finishes;
+    size_t finish_count{};
+    {
+        std::scoped_lock lock{g_profile_finish_mutex};
+        finishes = g_profile_finish_sites;
+        finish_count = g_profile_finish_site_count;
+        if (finishes[MaxFinishSites].count != 0) {
+            ++finish_count;
+        }
+        g_profile_finish_sites = {};
+        g_profile_finish_site_count = 0;
+    }
+    std::sort(finishes.begin(), finishes.begin() + finish_count,
+              [](const FinishSite& lhs, const FinishSite& rhs) {
+                  return lhs.elapsed_ns > rhs.elapsed_ns;
+              });
+    for (size_t i = 0; i < finish_count && i < 16; ++i) {
+        const auto& site = finishes[i];
+        auto name = site.file;
+        if (const auto slash = name.find_last_of("/\\"); slash != std::string_view::npos) {
+            name.remove_prefix(slash + 1);
+        }
+        LOG_INFO(Render_Vulkan,
+                 "Finish elapsed {:.1f} ms/s, {} calls ({:.0f}/s), avg {:.3f} ms, "
+                 "max {:.3f} ms at {}:{}",
+                 static_cast<double>(site.elapsed_ns) / 1e6 / seconds, site.count,
+                 static_cast<double>(site.count) / seconds,
+                 static_cast<double>(site.elapsed_ns) / 1e6 / site.count,
+                 static_cast<double>(site.max_ns) / 1e6, name, site.line);
     }
 }
 }
@@ -254,9 +322,10 @@ void Scheduler::Finish(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore,
     last_flush = std::chrono::steady_clock::now();
     flush_pending = false;
     if (profile) {
+        const u64 elapsed_ns = VideoCommon::Nx2Profile::Now() - start;
         g_profile_finishes.fetch_add(1, std::memory_order_relaxed);
-        g_profile_finish_ns.fetch_add(VideoCommon::Nx2Profile::Now() - start,
-                                      std::memory_order_relaxed);
+        g_profile_finish_ns.fetch_add(elapsed_ns, std::memory_order_relaxed);
+        CountFinish(location, elapsed_ns);
     }
 }
 
@@ -431,7 +500,14 @@ void Scheduler::RequestRenderpass(const Framebuffer* framebuffer, std::source_lo
     const VkRenderPass renderpass = framebuffer->RenderPass();
     const VkFramebuffer framebuffer_handle = framebuffer->Handle();
     const VkExtent2D render_area = framebuffer->RenderArea();
-    if (renderpass == state.renderpass && framebuffer_handle == state.framebuffer &&
+    // A draw continues the active pass whenever the same framebuffer and area are bound. The
+    // render-pass *variant* (a deferred clear's loadOp=CLEAR form) is only meaningful at begin -
+    // loadOps are applied once, and the base/variant passes are render-pass-compatible (only
+    // loadOp/storeOp differ). Comparing the exact handle here made every draw after a deferred
+    // clear restart the pass and re-LOAD what was just CLEARed (~118 MB of attachment traffic per
+    // world-target turn). The framebuffer handle already fixes the attachment structure and key,
+    // so it is the correct identity to compare.
+    if (state.renderpass && framebuffer_handle == state.framebuffer &&
         render_area.width == state.render_area.width &&
         render_area.height == state.render_area.height) {
         return;

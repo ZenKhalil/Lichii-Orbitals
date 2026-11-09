@@ -81,7 +81,16 @@ public:
 
     void SignalFence(std::function<void()>&& func) {
         Nx2Profile::Scope profile_scope{Nx2Profile::Zone::Fence};
-        const bool delay_fence = Settings::IsGPUFenceBehaviorDefault() ? Settings::IsGPULevelHigh() : Settings::IsGPUFenceBehaviorBalanced() || Settings::IsGPUFenceBehaviorAccurate();
+        // A fence that writes a fence-flagged query report is never skipped as empty: a skipped
+        // fence runs its operation at once, before the host GPU has run the work the report
+        // follows, and Ocarina of Time then reads a wrong report (white flashes on leaves and walls
+        // at low GPU accuracy).
+        const bool report_fence = VideoCore::g_signaling_query_report_fence;
+        const bool delay_fence = report_fence ||
+                                 (Settings::IsGPUFenceBehaviorDefault()
+                                      ? Settings::IsGPULevelHigh()
+                                      : Settings::IsGPUFenceBehaviorBalanced() ||
+                                            Settings::IsGPUFenceBehaviorAccurate());
         if constexpr (!can_async_check) {
             TryReleasePendingFences<false>();
         }
@@ -93,7 +102,8 @@ public:
             return;
         }
         skipped_fences = 0;
-        should_flush |= query_cache.HasUncommittedFlushes();
+        // A CPU-known payload still releases preceding host GPU work.
+        should_flush |= report_fence || query_cache.HasUncommittedFlushes();
         query_cache.CommitAsyncFlushes();
         TFence new_fence = CreateFence(!should_flush);
         if constexpr (can_async_check) {
@@ -107,7 +117,7 @@ public:
             pending_operations.emplace_back(std::move(uncommitted_operations));
             uncommitted_operations.clear(); // moved-from: make it empty explicitly
         }
-        pending_flushes.push_back(committed_flushes);
+        pending_flushes.push_back(committed_flushes | (report_fence ? RequiresCompletion : 0));
         QueueFence(new_fence);
         if (!delay_fence) {
             func();
@@ -209,7 +219,8 @@ private:
     void TryReleasePendingFences() {
         while (!fences.empty()) {
             TFence& current_fence = fences.front();
-            if (ShouldWait() && !IsFenceSignaled(current_fence)) {
+            const bool requires_completion = (pending_flushes.front() & RequiresCompletion) != 0;
+            if ((requires_completion || ShouldWait()) && !IsFenceSignaled(current_fence)) {
                 if constexpr (force_wait) {
                     WaitFence(current_fence);
                 } else {
@@ -321,6 +332,7 @@ private:
 
     static constexpr u8 TextureFlushes = 1;
     static constexpr u8 BufferFlushes = 2;
+    static constexpr u8 RequiresCompletion = 4; ///< Report callback must wait even without downloads.
 
     /// committed: what CommitAsyncFlushes returned for this fence.
     void PopAsyncFlushes(u8 committed) {
@@ -393,7 +405,7 @@ private:
     std::queue<TFence> fences;
     std::deque<std::function<void()>> uncommitted_operations;
     std::deque<std::deque<std::function<void()>>> pending_operations;
-    std::deque<u8> pending_flushes; ///< Per fence: the caches that committed downloads
+    std::deque<u8> pending_flushes; ///< Per fence: cache downloads and required host completion
     u32 skipped_fences{}; ///< Empty fences skipped since the last one made (GPU thread only)
 
     std::mutex guard;
