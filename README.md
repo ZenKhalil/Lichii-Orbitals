@@ -15,11 +15,17 @@ It is independent of those projects and is not affiliated with Nintendo.
 
 | Build | Status | Recommendation |
 |---|---|---|
-| [Build 1](https://github.com/ZenKhalil/Lichii-Orbitals/releases/tag/build-1) | Pre-release · Latest · Recommended | Validated startup/audio fixes and the tested memory/monitor corrections; rendering and performance issues remain open |
+| [Build 2](https://github.com/ZenKhalil/Lichii-Orbitals/releases/tag/build-2) | Pre-release · Latest · Recommended | Corrects the verified viewport depth dependency; startup/audio checks passed; rendering and performance issues remain open |
+| [Build 1](https://github.com/ZenKhalil/Lichii-Orbitals/releases/tag/build-1) | Pre-release · Previous baseline | Original numbered startup/audio and memory/monitor corrections; lacks the Build 2 viewport dependency fix |
 
-[Download Build 1 for Windows x64](https://github.com/ZenKhalil/Lichii-Orbitals/releases/download/build-1/Lichii-Orbitals-build-1-windows-x86_64.zip).
-The [release](https://github.com/ZenKhalil/Lichii-Orbitals/releases/tag/build-1)
-also includes application source, dependency source and checksums.
+[Download Build 2 for Windows x64](https://github.com/ZenKhalil/Lichii-Orbitals/releases/download/build-2/Lichii-Orbitals-build-2-windows-x86_64.zip).
+The release also includes [exact application source](https://github.com/ZenKhalil/Lichii-Orbitals/releases/download/build-2/Lichii-Orbitals-build-2-source.tar.gz),
+the [shared dependency source supplement](https://github.com/ZenKhalil/Lichii-Orbitals/releases/download/build-2/Lichii-Orbitals-build-1-dependency-sources.zip)
+and [checksums](https://github.com/ZenKhalil/Lichii-Orbitals/releases/download/build-2/SHA256SUMS-build-2.txt).
+The unchanged dependency supplement retains its Build 1 name and audit metadata;
+Build 2's dependency inputs/options and all 35 runtime DLLs were checked against
+Build 1. It is separate from Build 2's application source, and is not a claim of
+a bit-identical dependency rebuild.
 [Build history](docs/BUILD_HISTORY.md) records each numbered binary's validation.
 **Latest** identifies the newest published build; **recommended** identifies
 the tested choice. A newer diagnostic build does not automatically replace it.
@@ -30,28 +36,34 @@ saves and shader caches are not included. Use your own lawfully obtained files.
 
 ## Current scope
 
-Build 1 passes the original logo freeze and reaches local co-op
+Build 2 retains the fixes that pass the original logo freeze and reach local co-op
 gameplay. It includes repairs for audio-ring purging, timing after pauses,
 GPU query completion, shader-source memory coherency and surround stream
-creation. Reviewed monitor-lock changes improve the tested room's performance.
+creation. It additionally corrects the Vulkan viewport dirty dependency when the
+guest changes depth mode. A linked regression demonstrated the missing dependency
+before the fix and passed afterward. This is a correctness update; no FPS
+improvement or fix for the reported left-view artifacts is claimed.
 See [change notes](docs/ORBITALS_CHANGES.md) for the evidence and limitations.
 
-The numbered binary measured **30.04 FPS** in an opening cutscene window and
-**25.15 / 25.24 FPS** in two initial two-player room windows on the test machine.
-Stereo gameplay and a separate six-channel startup/menu check passed. Full-opening
-six-channel playback was checked on the preceding candidate, not repeated on
-Build 1. These checks do not establish stable 30 FPS throughout or complete
-rendering correctness. Brief audio underfills and loading/streaming stalls remain.
+The numbered binary completed the opening without skips and measured **29.97 FPS**
+in a 30-second cutscene window and **25.40 / 25.35 FPS** in two initial two-player
+room windows on the test machine. The stereo session lasted about 18 minutes
+33 seconds; a separate six-channel startup/menu check passed. Total logged audio
+padding was 310 ms and 51 ms respectively; the measured room windows added none.
+These checks do not establish stable 30 FPS throughout or complete rendering
+correctness. Brief audio underfills and loading/streaming stalls remain.
 
-Known issues still present in Build 1:
+Known issues still unresolved:
 
 - [Left-view jitter, glare and static lines (#1)](https://github.com/ZenKhalil/Lichii-Orbitals/issues/1): reported intermittently; cause unconfirmed.
 - [Initial-room performance below 30 FPS (#2)](https://github.com/ZenKhalil/Lichii-Orbitals/issues/2).
-- [Stale viewport depth after a depth-mode-only update (#3)](https://github.com/ZenKhalil/Lichii-Orbitals/issues/3): demonstrated source defect; its connection to the reported left-view artifacts is unconfirmed.
 
-Build 1 is recommended over the earlier local candidates for its validated
-startup/audio fixes and measured monitor baseline. Later chapters, all graphics
-paths and all audio devices have not been validated.
+[The viewport dependency defect (#3)](https://github.com/ZenKhalil/Lichii-Orbitals/issues/3)
+is corrected in Build 2. The observer run saw no depth-mode transition, so the
+game checks did not dynamically exercise that repair or establish a connection
+to the left-view artifacts. Build 2 is recommended for the verified correction
+and retained startup/audio behavior. Later chapters, all graphics paths and all
+audio devices have not been validated.
 
 ## Reporting issues
 
