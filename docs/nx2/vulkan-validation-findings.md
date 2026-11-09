@@ -148,3 +148,92 @@ jitter and static lines. Those reports remain unresolved.
 Build 2 remains the latest recommended published release. Candidate 1 is retained
 as a separately identified test artifact; source correctness fixes, gameplay
 performance and visual outcomes remain separate acceptance checks.
+
+## Build 3 candidate 2
+
+Source [`a75363aace35178af0bdbbdea3cfcce49a20cd68`](https://github.com/ZenKhalil/Lichii-Orbitals/commit/a75363aace35178af0bdbbdea3cfcce49a20cd68)
+adds the buffer-upload ordering correction in [PR 14](https://github.com/ZenKhalil/Lichii-Orbitals/pull/14)
+and independent graphics/compute trace budgets in [PR 15](https://github.com/ZenKhalil/Lichii-Orbitals/pull/15).
+The numbered candidate's combined regression run passed 127 cases and 51,826,409
+assertions. All 38 packaged PE files passed the host dependency check. Candidate
+1 and Build 2 package bytes were preserved.
+
+### Validation and visual results
+
+A separate 580.6-second Core Checks and Synchronization run used the same pinned
+validation layer. It reached co-op gameplay and both-player movement after opening
+skips. Both streams reached EOF without truncation or I/O failure. This instrumented
+run is not a performance measurement.
+
+| Finding | Reports | Scope |
+|---|---:|---|
+| Synchronization write-after-write / read-after-write | 0 / 0 | No synchronization category reached its duplicate limit in this run |
+| Indexed / non-indexed stride state | 0 / 0 | Not reported through the tested room/movement route |
+| Compute storage texel numeric type | 20 | Still present; exact metadata association for all reports |
+| Graphics uniform texel numeric type | 20 | Still present; exact metadata association for all reports |
+| Null Win32 instance handle / private-data feature | 2 / 1 | Startup reports remain |
+| 3D image layer-count forward-compatibility warning | 20 | Maintenance9 remains disabled |
+
+There were 43 errors, 20 warnings and three status messages. Both texel-type
+categories and the warning category reached their 20-message limits. Their
+counts are bounded emitted reports, not total invalid operations. The absence
+of synchronization reports is stronger evidence than Candidate 1's saturated
+write-after-write category, but does not prove every transfer path is correct.
+
+The split trace budget exposed the graphics mismatch: a native vertex-stage
+uniform texel-buffer declaration compiled as FLOAT was bound to `R32_UINT`.
+All 20 graphics errors matched the exact configured pipeline, view and descriptor
+coordinates. All 20 compute errors likewise matched UINT storage declarations
+bound to signed or floating-point views. This establishes specific type conflicts,
+not their contribution to a screen half or visible artifact. A traced descriptor
+count of one does not prove the entire pipeline has only one buffer descriptor.
+
+Faint horizontal bands were visible in both room views under validation, and
+strong magenta glare appeared in the left view near the damaged machinery.
+These observations do not establish equivalence to the original reported static
+lines. The validation run recorded a guest panic after the requested close and
+ForceStop, before cleanup and OS exit; it is not described as panic-free.
+
+### Normal run
+
+The same binary then ran with validation, texel tracing and heavy profiling off.
+The complete opening played without skips, followed by two initial-room samples
+at unchanged camera/character positions and movement of both characters. Settings
+and clock policy matched the previous normal comparison; no build ran concurrently.
+
+| Window | Duration | FPS | Frame time p99 |
+|---|---:|---:|---:|
+| Opening, middle | 30 seconds | 29.95 | 41.68 ms |
+| Opening, later | 20 seconds | 30.02 | 38.27 ms |
+| Initial room | 30 seconds | 24.31 | 49.06 ms |
+| Initial room, same-view repeat | 20 seconds | 24.45 | 50.56 ms |
+
+Both opening intervals were cutscene-only. Their enclosing audio intervals and
+the first room interval added no padding, retries or queue-full events. The
+repeat measurement was also padding-free; its wider audit bracket includes
+3.67 ms of padding after the measurement ended. Counters do not measure audible
+A/V alignment. These room results do not show an FPS improvement.
+
+After movement, stationary left-camera snapshots alternated ordinary-looking
+lighting with broad yellow/orange and green/blue glare at the machinery. The
+right camera was farther down the hallway and looked ordinary in the inspected
+snapshot; it was not aimed at the same machinery. The visual fault remains open.
+
+The **complete normal run was not fault-free**. At approximately 902.5 seconds,
+Cubeb reported output-device invalidation on all three output streams. Windows
+audio events independently recorded an NVIDIA endpoint becoming unavailable at
+the corresponding time. The guest reported audio error/panic `0x499` at 903.046
+seconds, before the UI close request at 930.942 seconds. ForceStop, an audio
+renderer termination timeout and an emulation-thread termination attempt followed.
+The process remained unresponsive and required guarded OS termination.
+
+No audio-device change was deliberately made during the test. The endpoint-loss
+trigger and shutdown hang cause remain unknown; this does not establish a
+Candidate 2 graphics regression. [Issue 16](https://github.com/ZenKhalil/Lichii-Orbitals/issues/16)
+tracks device recovery and shutdown behavior. Earlier clean measurement windows
+must not be used to characterize the entire run as clean.
+
+Build 2 remains the latest recommended published release. Candidate 2 is an
+unreleased correctness investigation with unresolved rendering, performance and
+audio-device-loss behavior. Raw logs, endpoint identities and game data remain
+private.

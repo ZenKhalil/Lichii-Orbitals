@@ -65,13 +65,14 @@ and issues [#6](https://github.com/ZenKhalil/Lichii-Orbitals/issues/6),
 [#8](https://github.com/ZenKhalil/Lichii-Orbitals/issues/8).
 Their connection to the intermittent visual artifacts is still unconfirmed.
 
-The unreleased **Build 3 candidate 1** removed the recorded stride and depth-read
-validation reports in its bounded follow-up run, but buffer-copy ordering and
-texel numeric-type errors remain. Normal room samples measured **24.69 / 24.57
-FPS**. Strong changing glare was observed in both views near the same machinery;
-the cause and connection to the original jitter/static report remain unconfirmed.
-See the [candidate results](docs/nx2/vulkan-validation-findings.md#build-3-candidate-1).
-It does not replace the recommended Build 2 release.
+The unreleased **Build 3 candidate 2** adds buffer-upload ordering to the earlier
+transfer and vertex-state corrections. Its bounded validation run recorded no
+synchronization or stride errors, but both compute and graphics texel numeric-type
+errors remain. Normal room samples measured **24.31 / 24.45 FPS**, and changing
+colored glare remained visible. A later audio-endpoint loss caused a guest panic
+and a shutdown hang, tracked in [#16](https://github.com/ZenKhalil/Lichii-Orbitals/issues/16).
+See the [candidate results](docs/nx2/vulkan-validation-findings.md#build-3-candidate-2).
+It does not replace the recommended Build 2 release or establish a performance gain.
 
 [The viewport dependency defect (#3)](https://github.com/ZenKhalil/Lichii-Orbitals/issues/3)
 is corrected in Build 2. The observer run saw no depth-mode transition, so the
