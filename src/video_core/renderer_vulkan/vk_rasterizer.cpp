@@ -2750,6 +2750,35 @@ void RasterizerVulkan::FrameDumpPass(const Framebuffer* framebuffer) {
 }
 
 void RasterizerVulkan::TickFrame() {
+    if (ViewportDependencyTrace::Enabled() && viewport_dependency_owner.WarnOnce()) {
+        try {
+            LOG_WARNING(Render_Vulkan, "Viewport dependency observer disabled: coverage_unknown=true skipped={} owner_mismatches={}",
+                viewport_dependency_owner.skipped.load(), viewport_dependency_owner.mismatches.load());
+        } catch (...) {}
+    }
+    // Frame-thread reporting is outside the draw's buffer/texture cache locks.
+    if (auto trace_access = ViewportDependencyTrace::Enabled() ? viewport_dependency_owner.TryAccess() : ViewportDependencyTrace::Owner::Access{}; trace_access) {
+        const u64 now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        auto& trace = viewport_dependency_trace;
+        ++trace.frame;
+        if (trace.ReportDue(now)) {
+            try {
+                LOG_INFO(Render_Vulkan, "Viewport dependency trace: observations={} same_channel_mode_changes={} clean_mode_changes={} stale_depth_mode_draws={} depth_mismatch_draws={} records={} last_frame={} last_channel={} last_mask={:#x}",
+                    trace.observations, trace.mode_changes, trace.clean_mode_changes,
+                    trace.stale_draws, trace.depth_mismatches, trace.stored,
+                    trace.has_last ? trace.last.frame : 0, trace.has_last ? trace.last.channel : -1,
+                    trace.has_last ? trace.last.mask : 0);
+                while (trace.printed < trace.stored) {
+                    const auto record = trace.records[trace.printed++];
+                    LOG_INFO(Render_Vulkan, "Viewport dependency mismatch: frame={} channel={} old_mode={} mode={} viewport_mask={:#x} first_index={} old_min_bits={:#x} old_max_bits={:#x} needed_min_bits={:#x} needed_max_bits={:#x}",
+                        record.frame, record.channel, record.old_mode, record.mode, record.mask,
+                        record.index, record.old_depth.minimum, record.old_depth.maximum,
+                        record.needed_depth.minimum, record.needed_depth.maximum);
+                }
+            } catch (...) {}
+        }
+    }
     if (VideoCore::Nx2Debug::HasRequests()) {
         if (auto capture = VideoCore::Nx2Debug::TakeCapture()) {
             frame_dump.Arm(std::move(capture->directory), capture->sampled, capture->buffers,
@@ -3250,7 +3279,18 @@ void RasterizerVulkan::HandleTransformFeedback() {
 }
 
 void RasterizerVulkan::UpdateViewportsState(Tegra::Engines::Maxwell3D::Regs& regs) {
-    if (!state_tracker.TouchViewports()) {
+    const bool dirty_viewports = state_tracker.TouchViewports();
+    if (auto trace_access = ViewportDependencyTrace::Enabled() ? viewport_dependency_owner.TryAccess() : ViewportDependencyTrace::Owner::Access{}; trace_access) {
+        const float scale = texture_cache.IsRescaling() ? Settings::values.resolution_info.up_factor : 1.0f;
+        viewport_dependency_trace.Observe(static_cast<u32>(regs.depth_mode),
+            regs.viewport_scale_offset_enabled != 0, dirty_viewports, viewport_dependency_trace.frame,
+            [&](u32 index) {
+                const auto viewport = GetViewportState(device, regs, index, scale);
+                return ViewportDependencyTrace::Depth{std::bit_cast<u32>(viewport.minDepth),
+                                                      std::bit_cast<u32>(viewport.maxDepth)};
+            }, std::min<u32>(device.GetMaxViewports(), Maxwell::NumViewports));
+    }
+    if (!dirty_viewports) {
         return;
     }
 
@@ -3273,6 +3313,10 @@ void RasterizerVulkan::UpdateViewportsState(Tegra::Engines::Maxwell3D::Regs& reg
             .minDepth = 0.0f,
             .maxDepth = 1.0f,
         };
+        if (auto trace_access = ViewportDependencyTrace::Enabled() ? viewport_dependency_owner.TryAccess() : ViewportDependencyTrace::Owner::Access{}; trace_access) {
+            viewport_dependency_trace.Emitted(static_cast<u32>(regs.depth_mode), false,
+                                               [](u32) { return ViewportDependencyTrace::Depth{}; });
+        }
         scheduler.Record([this, viewport](vk::CommandBuffer cmdbuf) {
             const u32 num_viewports = std::min<u32>(device.GetMaxViewports(), Maxwell::NumViewports);
             std::array<VkViewport, Maxwell::NumViewports> viewport_list{};
@@ -3294,6 +3338,12 @@ void RasterizerVulkan::UpdateViewportsState(Tegra::Engines::Maxwell3D::Regs& reg
         GetViewportState(device, regs, 12, scale), GetViewportState(device, regs, 13, scale),
         GetViewportState(device, regs, 14, scale), GetViewportState(device, regs, 15, scale),
     };
+    if (auto trace_access = ViewportDependencyTrace::Enabled() ? viewport_dependency_owner.TryAccess() : ViewportDependencyTrace::Owner::Access{}; trace_access) {
+        viewport_dependency_trace.Emitted(static_cast<u32>(regs.depth_mode), true, [&](u32 index) {
+            return ViewportDependencyTrace::Depth{std::bit_cast<u32>(viewport_list[index].minDepth),
+                                                  std::bit_cast<u32>(viewport_list[index].maxDepth)};
+        }, std::min<u32>(device.GetMaxViewports(), Maxwell::NumViewports));
+    }
     scheduler.Record([this, viewport_list](vk::CommandBuffer cmdbuf) {
         const u32 num_viewports = std::min<u32>(device.GetMaxViewports(), Maxwell::NumViewports);
         const vk::Span<VkViewport> viewports(viewport_list.data(), num_viewports);
@@ -4038,6 +4088,7 @@ void RasterizerVulkan::InitializeChannel(Tegra::Control::ChannelState& channel) 
 
 void RasterizerVulkan::BindChannel(Tegra::Control::ChannelState& channel) {
     const s32 channel_id = channel.bind_id;
+    if (auto trace_access = ViewportDependencyTrace::Enabled() ? viewport_dependency_owner.TryAccess() : ViewportDependencyTrace::Owner::Access{}; trace_access) viewport_dependency_trace.Channel(channel_id);
     BindToChannel(channel_id);
     {
         std::scoped_lock lock{buffer_cache.mutex, texture_cache.mutex};

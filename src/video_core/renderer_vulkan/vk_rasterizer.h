@@ -30,6 +30,7 @@
 #include "video_core/renderer_vulkan/vk_render_pass_cache.h"
 #include "video_core/renderer_vulkan/vk_frame_dump.h"
 #include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
+#include "video_core/renderer_vulkan/viewport_dependency_trace.h"
 #include "video_core/renderer_vulkan/vk_texture_cache.h"
 #include "video_core/renderer_vulkan/vk_update_descriptor.h"
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
@@ -315,6 +316,8 @@ private:
         std::array<f32, 280 * 12> bones{};
     } oot_actor, oot_previous_actor;
 #endif
+    ViewportDependencyTrace::Owner viewport_dependency_owner;
+    ViewportDependencyTrace::State viewport_dependency_trace;
     u64 render_trace_frame = 0;
     u32 render_trace_draws = 0;
     u32 render_trace_clears = 0;
