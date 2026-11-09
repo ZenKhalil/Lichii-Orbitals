@@ -1,8 +1,9 @@
 # Exclusive-monitor two-PAUSE experiment
 
 This is an unshipped experiment based on Candidate 5 source commit
-`59f6372b5958e52ffce224567baac6777c07a759`. It is off by default. The full
-application-linked tests and gameplay comparison have **not run**. There is no
+`59f6372b5958e52ffce224567baac6777c07a759`. It is off by default. The application-linked tests have now passed in both switch modes; see
+[C6 correctness results](../CANDIDATE6_CORRECTNESS.md). The gameplay comparison
+has **not run**. There is no
 claim of improved FPS, fairness, or resolution of the reported rendering artifact.
 
 ## Candidate behavior
@@ -47,7 +48,7 @@ termination safeguard. The short contention runs are correctness observations,
 not performance benchmarks. The controlled exception is not a production JIT
 fastmem-fault recovery test.
 
-## Application-linked tests still required
+## Application-linked test scope
 
 `src/tests/common/dynarmic_pause2.cpp` adds four cases beside the existing
 Windows x64 Dynarmic lock tests. The first three cover generated lock control
@@ -62,7 +63,7 @@ real A64 JITs with one shared monitor and requires:
 
 The JIT fixture uses `BRK` to halt between instructions. `SVC` cannot delimit this
 test because the current supervisor-call emitter clears local exclusive state.
-These are new, **unrun** 64-bit tests with sequentially interleaved JITs. They do
+These are new 64-bit tests with sequentially interleaved JITs. They do
 not establish simultaneous-JIT execution, 128-bit operation coverage, or full
 Core/GPU memory-coherency behavior. Existing shipped lock tests contain no
 same-value-STXR case; their prior results are not being relabeled as this test.
@@ -72,8 +73,8 @@ After review and an explicit no-game build window:
 1. Rebuild all emitter consumers and link the actual application test target.
    The new emitter parameter changes its C++ signature; hot patching is unsuitable.
 2. Run the full suite with PAUSE2 unset and the accepted WAITPKG-disabled selection.
-   With the separately committed issue 27 regression, the expected focused
-   total is 166 cases, up from Candidate 5's 161; record the actual result. This is the selected application regression
+   With issue 27, tuple preparation and trace-filter cases integrated, the
+   selected total is 172 cases, up from Candidate 5's 161. This is the selected application regression
    filter, not every test compiled into the executable. Keep the separate
    shader-compiler checks appropriate to the final integration.
 3. Run `[dynarmic_pause2]` in fresh processes with `EDEN_NX2_DISABLE_WAITPKG=1`
@@ -112,19 +113,19 @@ remain intact. The current README and viewport documentation are not replaced.
 The isolated 194-check and 18-process results above belong to the earlier
 immutable source snapshots. No compiler, linked test, GPU fixture, emulator or
 benchmark was run for this refresh. Candidate 5's successful 161-case regression
-does not include these four new cases. The fresh linked and same-binary A/B/A
-gates remain mandatory before considering deployment. This preparation does not
-change upstream import policy, production monitor behavior, or Candidate 5.
+does not include these four new cases. The later C6 validation completed the linked gate; same-binary A/B/A remains
+mandatory before considering deployment. The experiment leaves the default
+monitor behavior, upstream import policy and Candidate 5 unchanged.
 
 ## Candidate 6 preparation
 
 This isolated branch combines the experiment with the separately documented
-[compute serialization guard](../COMPUTE_CACHE_CONFLICTS.md). Neither change has
-received application-linked validation in this preparation. The first native
-gate remains baseline RED then guarded GREEN for issue 27, followed by the new
-PAUSE2 linked cases in fresh processes with the switch disabled and enabled.
-Any future tuple-policy or trace-filter changes require their own reviewed
-integration and adjustment of expected test counts.
+[compute serialization guard](../COMPUTE_CACHE_CONFLICTS.md). Both changes have
+received application-linked validation as recorded in the C6 results. The first
+native gate reproduced baseline RED then guarded GREEN for issue 27, followed
+by the PAUSE2 linked cases in fresh processes with the switch disabled and
+enabled. The separately reviewed dormant tuple and trace-filter additions are
+included in the 172-case total; further changes need their own validation.
 
 The later performance comparison must use the same final binary with only the
 PAUSE2 environment switch changed, followed by restoration of the disabled

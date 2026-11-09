@@ -37,8 +37,9 @@ coverage failure: unrelated early controls exhaust the quota before a later
 target. The second case uses actual Capture/Scope methods, tests target tickets,
 host metadata, disabled/invalid states, unchanged unrestricted behavior and
 filtered rows after a full batch. The RED version omits only the membership gate.
-These linked tests have not run. Existing budget, lifetime and scope tests must
-also pass before this diagnostic is used in a new candidate.
+The integrated seven-case suite and fresh-process selector checks have passed;
+see [C6 correctness results](../CANDIDATE6_CORRECTNESS.md). These include the
+existing budget, lifetime and scope cases.
 
 No test or trace proves pixel correctness, game-artifact causality, a particular
 draw's execution, or that every selected shader received coverage. This feature

@@ -4,7 +4,8 @@ This preparation is based on Candidate 5 source
 `59f6372b5958e52ffce224567baac6777c07a759`. It does not activate multi-declaration
 pipeline compilation, caching or selection. Existing single-declaration uniform
 and store families, their supported formats and renderer behavior remain the
-active paths. No native test or gameplay result is claimed for this change.
+active paths. Native preparation checks are recorded in
+[C6 correctness results](CANDIDATE6_CORRECTNESS.md); gameplay remains untested.
 
 The new helper accepts one to four static count-one uniform-texel declarations
 only after checking each descriptor and every normalized buffer-fetch index.
@@ -19,7 +20,8 @@ and order are significant. Exact supported formats are checked first. R8_UNORM
 is classified as Float only in this dormant policy; the active seven-format
 single-uniform policy still rejects it. R8's one-byte stride and normalization,
 and R16's two-byte stride/default components, remain properties of the original
-host view. No view is replaced or reinterpreted. R8 GPU values remain untested.
+host view. No view is replaced or reinterpreted. The six-case synthetic GPU value gate is recorded in the C6 results; it does
+not activate this policy in the renderer.
 
 The descriptor queue has a dormant bounded observation facility. It copies at
 most four requested existing final texel writes, including the original view,
@@ -30,7 +32,7 @@ was actually written; recording it is not proof the view is suitable. The old
 single-entry observer remains unchanged. No production caller enables the new
 observer or calls the new tuple policy in this preparation.
 
-## Prepared validation, not executed
+## Validation scope
 
 Four application cases are added under `[compute_uniform_tuple]`:
 
@@ -49,8 +51,9 @@ Four application cases are added under `[compute_uniform_tuple]`:
   exact-method projection is prepared for both descriptor payload modes; it is
   not a fabricated Device/Scheduler or a lifecycle test.
 
-Application compilation, linked checks, the exact-method projection and R8 GPU
-normalization/default-component values require an authorized no-game window.
+Application compilation, the four linked cases and the exact-method projection
+passed in the authorized no-game window. The separate six-case synthetic GPU
+gate also passed R8 normalization/default components and ordered mixed fetches.
 No prior Candidate 5 result is relabelled as validation of these new cases.
 
 ## Activation remains blocked on lifecycle design

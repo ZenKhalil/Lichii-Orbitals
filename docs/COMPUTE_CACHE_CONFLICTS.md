@@ -1,8 +1,9 @@
 # Refuse known-conflicting compute cache inputs
 
 This prepared change addresses [issue 27](https://github.com/ZenKhalil/Lichii-Orbitals/issues/27).
-It has not yet been compiled or tested in the application. Candidate 5 and its
-immutable package remain unchanged.
+The integrated regression has now passed baseline RED and guarded GREEN; see
+[C6 correctness results](CANDIDATE6_CORRECTNESS.md). Candidate 5 and its immutable
+package remain unchanged.
 
 Compute input capture already detects repeated queries that return different
 constant-buffer values, texture types or texture formats, and forced pointer
@@ -34,8 +35,8 @@ unbound-instruction controls are retained.
 After an explicit no-game native window, run the new regression first against
 the baseline implementation with only the test added. Preserve the expected RED
 failure. Then enable the one-line guard and require GREEN, followed by the
-compute replay and selected pipeline-cache/compiler regressions. No baseline
-failure or passing linked result is claimed by this source-preparation commit.
+compute replay and selected pipeline-cache/compiler regressions. The original source-preparation commit claimed no run; the subsequent
+[C6 validation](CANDIDATE6_CORRECTNESS.md) records the completed RED/GREEN gate.
 
 This is a local correction to an existing capture invariant, not an upstream
 port. Runtime performance and old-cache recovery are outside its claim.
