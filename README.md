@@ -65,14 +65,16 @@ and issues [#6](https://github.com/ZenKhalil/Lichii-Orbitals/issues/6),
 [#8](https://github.com/ZenKhalil/Lichii-Orbitals/issues/8).
 Their connection to the intermittent visual artifacts is still unconfirmed.
 
-The unreleased **Build 3 candidate 2** adds buffer-upload ordering to the earlier
-transfer and vertex-state corrections. Its bounded validation run recorded no
-synchronization or stride errors, but both compute and graphics texel numeric-type
-errors remain. Normal room samples measured **24.31 / 24.45 FPS**, and changing
-colored glare remained visible. A later audio-endpoint loss caused a guest panic
-and a shutdown hang, tracked in [#16](https://github.com/ZenKhalil/Lichii-Orbitals/issues/16).
-See the [candidate results](docs/nx2/vulkan-validation-findings.md#build-3-candidate-2).
-It does not replace the recommended Build 2 release or establish a performance gain.
+The unreleased **Build 3 candidate 3** adds immutable compute-compiler inputs,
+typed variants for a narrow storage-write path, and the correct Win32 surface
+instance handle. Its bounded validation run retained uniform texel-buffer type faults
+and other excluded storage mismatches. Normal room samples measured
+**22.29 / 22.00 FPS**, below the earlier candidates; a repeatable cause for that
+difference has not been established. It does not replace the recommended Build 2
+release. See the [candidate results](docs/nx2/vulkan-validation-findings.md#build-3-candidate-3).
+The earlier monitor-endpoint loss and shutdown hang remain open in
+[#16](https://github.com/ZenKhalil/Lichii-Orbitals/issues/16); testing on a connected
+headset does not demonstrate device-loss recovery.
 
 [The viewport dependency defect (#3)](https://github.com/ZenKhalil/Lichii-Orbitals/issues/3)
 is corrected in Build 2. The observer run saw no depth-mode transition, so the

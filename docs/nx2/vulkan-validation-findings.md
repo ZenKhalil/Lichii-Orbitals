@@ -237,3 +237,108 @@ Build 2 remains the latest recommended published release. Candidate 2 is an
 unreleased correctness investigation with unresolved rendering, performance and
 audio-device-loss behavior. Raw logs, endpoint identities and game data remain
 private.
+
+## Build 3 candidate 3
+
+Source [`d969d8e90880897f96c5ef3797dd732e7bb1d0ab`](https://github.com/ZenKhalil/Lichii-Orbitals/commit/d969d8e90880897f96c5ef3797dd732e7bb1d0ab)
+adds the Win32 surface-instance correction in [PR 18](https://github.com/ZenKhalil/Lichii-Orbitals/pull/18),
+immutable cold/warm compute replay in [PR 19](https://github.com/ZenKhalil/Lichii-Orbitals/pull/19),
+and narrowly eligible typed storage-write pipelines in [PR 20](https://github.com/ZenKhalil/Lichii-Orbitals/pull/20).
+The actual numbered test binary passed 140 combined cases and 51,840,348
+assertions. Separate replay, family and compiler/cache selections passed; these
+overlap the combined selection and are not additive. All 38 packaged PE files
+passed the dependency check. Earlier numbered packages remain unchanged.
+
+An actual-emitter headless Vulkan check exercised eight storage-write cases.
+Mandatory integer and finite-float values and surrounding canaries matched, with
+no Core or Synchronization validation error. Special floating-point patterns also
+matched on this RTX 3080, but are observations rather than a portable bit-exact
+guarantee. This checks the narrow emitted store path; it does not establish queued
+pipeline lifetime, buffer-read correctness or gameplay pixels.
+
+### Validation run
+
+A separate 594-second run positively verified the pinned Vulkan layer, Core
+Checks and Synchronization. Both output streams were captured completely through
+process exit. It reached the room and both-player movement after opening skips.
+
+| Finding | Reports | Scope |
+|---|---:|---|
+| Synchronization / vertex stride / Win32 instance | 0 / 0 / 0 | None captured on the tested route |
+| Compute uniform texel numeric type | 20 | FLOAT declarations bound to unsigned views |
+| Graphics uniform texel numeric type | 20 | FLOAT vertex declaration bound to R32_UINT |
+| Private-data feature | 1 | Startup error remains |
+| 3D image layer-count forward-compatibility warning | 20 | Maintenance9 remains disabled |
+
+The totals were **41 errors, 20 warnings and three status messages**. Both texel
+categories and the warning category reached their duplicate limits. All 40 texel
+errors matched exact pipeline/view/set/binding/element metadata; later silence
+cannot establish clean rendering.
+
+Eight compute storage controls had compatible compiled and actual host numeric
+classes: SINT/R32_SINT, FLOAT/R32_SFLOAT or RGBA32_SFLOAT, and the existing
+UINT/RGBA32_UINT fallback. Another 64 metadata rows still showed UINT/R32_SINT
+conflicts in programs with stage-wide image atomics, excluded by the narrow
+family. The dispatch-error limit had already been reached by uniform-read faults
+before these rows appeared. No format reinterpretation hides those conflicts.
+Object correlation does not identify a screen half or establish an artifact cause.
+
+Faint horizontal bands appeared in both room views. A broad blue glow beside the
+left window appeared in one snapshot and was absent in the next stationary
+snapshot. This does not establish that every light effect is unintended or that
+it is identical to the original jitter/static report. Validation FPS is not used
+as a performance comparison.
+
+Stereo headset output's last logged totals were 26,409,760 frames copied and
+accepted, with 1.802 seconds cumulative padding and no queue-full/retry. No host
+audio fault, guest panic or native graphics rejection was logged. UI close led
+to cleanup and normal OS exit, with no
+new Error/Critical entry after close. The 135 recurring startup/cache/stub errors
+remain. This run did not exercise recovery from monitor-endpoint loss.
+
+### Normal run
+
+The same binary ran with validation, texel tracing and heavy profiling off,
+immediately after the validation run with warm caches. The full opening played
+without skips. Both room measurements preceded camera or character movement.
+No build or GPU test ran concurrently. Rendering settings and the per-application
+clock policy matched the preceding comparison; audio used the connected stereo
+headset because the earlier selected monitor endpoint had become unavailable.
+
+| Window | Duration | FPS | Frame time p99 |
+|---|---:|---:|---:|
+| Opening, middle | 30 seconds | 29.92 | 40.47 ms |
+| Opening, later | 20 seconds | 29.78 | 42.44 ms |
+| Initial room | 30 seconds | 22.29 | 55.79 ms |
+| Initial room, same-view repeat | 20 seconds | 22.00 | 57.12 ms |
+
+All four enclosing audio intervals added no padding, retries or queue-full events.
+These counters do not measure audible A/V alignment. The room measurements are
+lower than Candidate 2's 24.31 / 24.45 FPS; this comparison does not isolate the
+cause. They do not meet the 30 FPS target.
+
+The normal run's last logged audio totals were 31,459,152 frames copied and
+accepted, with 286 ms cumulative padding and no queue-full/retry. No host audio
+fault, guest panic, native graphics rejection or unavailable typed-family report
+was logged during the complete run. The same 135 known
+startup/cache/stub errors remain. UI close led to cleanup and guarded normal OS
+exit without a post-close Error/Critical entry. Title and global configuration
+bytes matched their respective pre-run copies.
+
+First presentation occurred at 12.309 seconds and stereo Open/Attach at
+30.074/30.076 seconds. The cache reported 3,852 pipelines at 5.804 seconds,
+73,703 skipped graphics entries and 64 background entries, with the known three
+disk-replay failures. There is no explicit cache-completion marker. These are
+startup milestones, not gameplay-readiness timings: menu interaction included
+coordinator delays, and the run used warm caches. They do not establish cold-load
+performance or explain the earlier three-minute load.
+
+Faint banding remained visible in the room light cones/back wall. No broad
+changing colored glare was seen in the inspected normal snapshots, but the later
+camera positions differed from the earlier machinery checks. That absence does
+not establish a fix for the intermittent visual problem.
+
+**Candidate 3 is not promoted. Build 2 remains the latest recommended published
+release and selected launcher.** Uniform-texel faults, excluded storage cases,
+the original visual report, performance and audio-device-loss recovery remain
+open. Raw logs, game data and private configuration remain private.
