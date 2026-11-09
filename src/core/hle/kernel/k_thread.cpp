@@ -923,6 +923,23 @@ namespace Kernel {
         R_SUCCEED();
     }
 
+    bool KThread::TryCopyWaitingUserContextForDiagnostic(KernelCore& kernel,
+                                                        Svc::ThreadContext& out) {
+        // The caller excludes an active GDB debugger, which has a separate context protocol.
+        if (this == kernel.GetCurrentEmuThread() || GetThreadType() != ThreadType::User ||
+            !m_parent || !m_parent->IsApplication() || !m_parent->Is64Bit()) {
+            return false;
+        }
+        // The scheduler holds this guard from Reload through execution until SaveContext.
+        // A client that has begun its IPC wait but has not unloaded is therefore still busy.
+        std::unique_lock lock{m_context_guard, std::try_to_lock};
+        if (!lock || GetState() != ThreadState::Waiting || IsTerminationRequested()) {
+            return false;
+        }
+        out = m_thread_context;
+        return true;
+    }
+
     Result KThread::GetThreadContext3(KernelCore& kernel, Svc::ThreadContext* out) {
         // Lock ourselves.
         KScopedLightLock lk{m_activity_pause_lock};

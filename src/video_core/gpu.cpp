@@ -18,6 +18,7 @@
 #include "common/assert.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
+#include "common/cpu_read_timing.h"
 #include "common/settings_enums.h"
 #include "core/core.h"
 #include "core/core_timing.h"
@@ -263,8 +264,11 @@ struct GPU::Impl {
     }
 
     VideoCore::RasterizerDownloadArea OnCPURead(DAddr addr, u64 size) {
+        Common::CpuReadTiming::ReadScope timing;
         auto raster_area = renderer->ReadRasterizer()->GetFlushArea(addr, size);
+        timing.LookupComplete(raster_area.preemtive);
         if (raster_area.preemtive) {
+            timing.Complete();
             return raster_area;
         }
         raster_area.preemtive = true;
@@ -281,7 +285,9 @@ struct GPU::Impl {
             renderer->ReadRasterizer()->FlushRegion(raster_area.start_address, raster_area.end_address - raster_area.start_address);
         });
         gpu_thread.TickGPU(is_async);
+        timing.BeginWait();
         WaitForSyncOperation(fence);
+        timing.Complete();
         return raster_area;
     }
 

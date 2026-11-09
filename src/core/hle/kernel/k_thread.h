@@ -600,6 +600,9 @@ public:
 
     Result GetThreadContext3(KernelCore& kernel, Svc::ThreadContext* out);
 
+    /// Best-effort diagnostic only: never waits or changes scheduling.
+    bool TryCopyWaitingUserContextForDiagnostic(KernelCore& kernel, Svc::ThreadContext& out);
+
     KThread* RemoveUserWaiterByKey(KernelCore& kernel, bool* out_has_waiters, KProcessAddress key) {
         return this->RemoveWaiterByKey(kernel, out_has_waiters, key, false);
     }

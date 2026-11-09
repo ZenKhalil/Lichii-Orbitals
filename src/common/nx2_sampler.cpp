@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <map>
 #include <mutex>
 #include <set>
@@ -21,6 +22,7 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <nlohmann/json.hpp>
 
 #include <windows.h>
 #include <tlhelp32.h>
@@ -248,8 +250,189 @@ struct Symbolizer {
     std::unordered_map<DWORD64, std::string> cache;
 };
 
+// Counts are formed only after every target has resumed. Raw RIPs are never coalesced by symbol.
+nlohmann::json RawSelfCounts(const std::vector<Target>& targets,
+                             const std::vector<Sample>& samples, size_t rounds, size_t row_limit) {
+    nlohmann::json report{{"schema", "nx2-raw-self-v1"}, {"row_limit", row_limit},
+                          {"threads", nlohmann::json::array()}};
+    size_t remaining = row_limit;
+    size_t all_valid = 0, all_emitted = 0, all_omitted = 0;
+    for (unsigned thread = 0; thread < targets.size(); ++thread) {
+        std::map<DWORD64, size_t> counts;
+        size_t contexts = 0, zero_depth = 0;
+        for (const Sample& sample : samples) {
+            if (sample.thread != thread) {
+                continue;
+            }
+            ++contexts;
+            if (sample.depth == 0) {
+                ++zero_depth;
+            } else {
+                ++counts[sample.frames[0]];
+            }
+        }
+        std::vector<std::pair<size_t, DWORD64>> sorted;
+        for (const auto& [rip, count] : counts) {
+            sorted.emplace_back(count, rip);
+        }
+        std::sort(sorted.rbegin(), sorted.rend());
+        const size_t take = (std::min)(remaining, sorted.size());
+        nlohmann::json ips = nlohmann::json::array();
+        size_t emitted = 0, omitted = 0;
+        for (size_t i = 0; i < sorted.size(); ++i) {
+            const auto [count, rip] = sorted[i];
+            if (i < take) {
+                ips.push_back({{"rip", fmt::format("{:#x}", rip)}, {"count", count}});
+                emitted += count;
+            } else {
+                omitted += count;
+            }
+        }
+        const size_t valid = contexts - zero_depth;
+        report["threads"].push_back({
+            {"index", thread}, {"name", targets[thread].name}, {"attempted_samples", rounds},
+            {"captured_contexts", contexts}, {"valid_self_samples", valid},
+            {"zero_depth_samples", zero_depth}, {"dropped_samples", rounds - contexts},
+            {"unique_rips", sorted.size()}, {"emitted_unique_rips", take},
+            {"omitted_unique_rips", sorted.size() - take}, {"emitted_samples", emitted},
+            {"omitted_samples", omitted}, {"ips", std::move(ips)}});
+        remaining -= take;
+        all_valid += valid;
+        all_emitted += emitted;
+        all_omitted += omitted;
+    }
+    report["valid_self_samples"] = all_valid;
+    report["emitted_samples"] = all_emitted;
+    report["omitted_samples"] = all_omitted;
+    report["complete"] = all_omitted == 0;
+    return report;
+}
+
+void WriteRawSelf(const std::vector<Target>& targets, const std::vector<Sample>& samples,
+                  size_t rounds, bool capacity_limited, const char* path, RawSelfResult& result) {
+    result = {};
+    try {
+        constexpr size_t MaxRows = 65536;
+        auto report = RawSelfCounts(targets, samples, rounds, MaxRows);
+        report["process_id"] = GetCurrentProcessId();
+        report["capacity_limited"] = capacity_limited;
+        report["denominator"] = "all captured contexts with a valid first frame; zero-depth contexts and failed captures are separate";
+        const std::string destination = std::string{path} + ".self.json";
+        std::ofstream file(destination, std::ios::binary | std::ios::trunc);
+        file << report.dump(2) << '\n';
+        file.close();
+        if (!file) {
+            result.error = "could not write complete raw-self artifact";
+            return;
+        }
+        result.file = destination;
+    } catch (const std::exception& error) {
+        result.error = error.what();
+    } catch (...) {
+        result.error = "raw-self report failed";
+    }
+}
+
+// Uses only captured frames after all target threads have resumed.
+nlohmann::json RawStackCounts(const std::vector<Target>& targets,
+                              const std::vector<Sample>& samples, size_t rounds, size_t row_limit) {
+    nlohmann::json report{{"schema", "nx2-raw-stacks-v1"}, {"row_limit", row_limit},
+                          {"max_capture_depth", MaxDepth}, {"frame_order", "leaf_to_root"},
+                          {"threads", nlohmann::json::array()}};
+    size_t remaining = row_limit;
+    size_t all_valid = 0, all_emitted = 0, all_omitted = 0, all_at_limit = 0;
+    for (unsigned thread = 0; thread < targets.size(); ++thread) {
+        std::map<std::vector<DWORD64>, size_t> counts;
+        size_t contexts = 0, zero_depth = 0, at_limit = 0;
+        for (const Sample& sample : samples) {
+            if (sample.thread != thread) {
+                continue;
+            }
+            ++contexts;
+            if (sample.depth == 0) {
+                ++zero_depth;
+                continue;
+            }
+            at_limit += sample.depth == MaxDepth;
+            ++counts[std::vector<DWORD64>(sample.frames.begin(),
+                                         sample.frames.begin() + sample.depth)];
+        }
+        std::vector<std::pair<size_t, std::vector<DWORD64>>> sorted;
+        for (const auto& [frames, count] : counts) {
+            sorted.emplace_back(count, frames);
+        }
+        std::sort(sorted.rbegin(), sorted.rend());
+        const size_t take = (std::min)(remaining, sorted.size());
+        nlohmann::json stacks = nlohmann::json::array();
+        size_t emitted = 0, omitted = 0;
+        for (size_t i = 0; i < sorted.size(); ++i) {
+            const auto& [count, frames] = sorted[i];
+            if (i < take) {
+                nlohmann::json addresses = nlohmann::json::array();
+                for (const auto rip : frames) {
+                    addresses.push_back(fmt::format("{:#x}", rip));
+                }
+                stacks.push_back({{"frames", std::move(addresses)}, {"count", count}});
+                emitted += count;
+            } else {
+                omitted += count;
+            }
+        }
+        const size_t valid = contexts - zero_depth;
+        report["threads"].push_back({
+            {"index", thread}, {"name", targets[thread].name}, {"attempted_samples", rounds},
+            {"captured_contexts", contexts}, {"valid_stack_samples", valid},
+            {"zero_depth_samples", zero_depth}, {"dropped_samples", rounds - contexts},
+            {"at_depth_limit_samples", at_limit}, {"unique_stacks", sorted.size()},
+            {"emitted_unique_stacks", take}, {"omitted_unique_stacks", sorted.size() - take},
+            {"emitted_samples", emitted}, {"omitted_samples", omitted},
+            {"stacks", std::move(stacks)}});
+        remaining -= take;
+        all_valid += valid;
+        all_emitted += emitted;
+        all_omitted += omitted;
+        all_at_limit += at_limit;
+    }
+    report["valid_stack_samples"] = all_valid;
+    report["emitted_samples"] = all_emitted;
+    report["omitted_samples"] = all_omitted;
+    report["at_depth_limit_samples"] = all_at_limit;
+    report["complete"] = all_omitted == 0;
+    return report;
+}
+
+void WriteRawStacks(const std::vector<Target>& targets, const std::vector<Sample>& samples,
+                    size_t rounds, bool capacity_limited, const char* path,
+                    RawStacksResult& result) {
+    result = {};
+    try {
+        constexpr size_t MaxRows = 16384;
+        auto report = RawStackCounts(targets, samples, rounds, MaxRows);
+        report["process_id"] = GetCurrentProcessId();
+        report["capacity_limited"] = capacity_limited;
+        report["frame_semantics"] = "frame0 is the sampled instruction pointer; later frames are saved unwind/return PCs, not executing instructions; keep original PCs when using returnPC-1 only for containing-range lookup";
+        report["denominator"] = "all captured contexts with at least one frame; zero-depth contexts and failed captures are separate";
+        report["unwind_limit"] = "complete means no captured stack rows omitted, not a complete unwind; early-stop reason is unavailable; at_depth_limit may be truncated";
+        const std::string destination = std::string{path} + ".stacks.json";
+        std::ofstream file(destination, std::ios::binary | std::ios::trunc);
+        file << report.dump(2) << '\n';
+        file.close();
+        if (!file) {
+            result.error = "could not write complete raw-stacks artifact";
+            return;
+        }
+        result.file = destination;
+    } catch (const std::exception& error) {
+        result.error = error.what();
+    } catch (...) {
+        result.error = "raw-stacks report failed";
+    }
+}
+
+
 std::string Report(const std::vector<Target>& targets, const std::vector<Sample>& samples,
-                   const char* path) {
+                   const char* path, size_t rounds, bool capacity_limited, RawSelfResult* raw_self,
+                   RawStacksResult* raw_stacks) {
     Symbolizer symbolizer;
     std::string text;
     for (unsigned thread = 0; thread < targets.size(); ++thread) {
@@ -345,19 +528,33 @@ std::string Report(const std::vector<Target>& targets, const std::vector<Sample>
         }
         std::fclose(out);
     }
+    if (raw_self != nullptr) {
+        WriteRawSelf(targets, samples, rounds, capacity_limited, path, *raw_self);
+    }
+    if (raw_stacks != nullptr) {
+        WriteRawStacks(targets, samples, rounds, capacity_limited, path, *raw_stacks);
+    }
     return text;
 }
 
 std::string SampleThreads(const std::vector<std::string>& patterns, double seconds,
-                          const std::string& out) {
+                          const std::string& out, RawSelfResult* raw_self = nullptr,
+                          RawStacksResult* raw_stacks = nullptr) {
     const std::vector<Target> targets = FindThreads(patterns);
     std::fprintf(stderr, "nx2 sampler: %zu threads match, sampling %.0f s\n", targets.size(),
                  seconds);
     if (targets.empty()) {
+        if (raw_self != nullptr) {
+            *raw_self = {{}, "no thread matches"};
+        }
+        if (raw_stacks != nullptr) {
+            *raw_stacks = {{}, "no thread matches"};
+        }
         return "no thread matches";
     }
     std::vector<Sample> samples;
     samples.reserve(static_cast<size_t>(seconds * 1100.0) * targets.size() + 16);
+    size_t rounds = 0;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
     while (std::chrono::steady_clock::now() < deadline &&
            samples.size() + targets.size() <= samples.capacity()) {
@@ -375,13 +572,18 @@ std::string SampleThreads(const std::vector<std::string>& patterns, double secon
             }
             ResumeThread(handle);
         }
+        // Count complete sweeps only after all targets resumed; the suspended path is unchanged.
+        if (raw_self != nullptr || raw_stacks != nullptr) {
+            ++rounds;
+        }
         Sleep(1);
     }
     // DbgHelp is single-threaded: the debug server's `sample` and EDEN_NX2_SAMPLE can report at
     // the same time.
     static std::mutex report_mutex;
     std::unique_lock report_lock{report_mutex};
-    std::string text = Report(targets, samples, out.c_str());
+    std::string text = Report(targets, samples, out.c_str(), rounds,
+                              samples.size() + targets.size() > samples.capacity(), raw_self, raw_stacks);
     report_lock.unlock();
     std::fprintf(stderr, "nx2 sampler: %zu samples written to %s\n", samples.size(), out.c_str());
     for (const auto& target : targets) {
@@ -392,8 +594,9 @@ std::string SampleThreads(const std::vector<std::string>& patterns, double secon
 
 } // Anonymous namespace
 
-std::string Sample(const char* names, double seconds, const std::string& out) {
-    return SampleThreads(SplitNames(names), seconds, out);
+std::string Sample(const char* names, double seconds, const std::string& out, RawSelfResult* raw_self,
+                   RawStacksResult* raw_stacks) {
+    return SampleThreads(SplitNames(names), seconds, out, raw_self, raw_stacks);
 }
 
 void StartFromEnvironment() {
@@ -416,7 +619,14 @@ void StartFromEnvironment() {
 
 namespace Nx2Sampler {
 void StartFromEnvironment() {}
-std::string Sample(const char*, double, const std::string&) {
+std::string Sample(const char*, double, const std::string&, RawSelfResult* raw_self,
+                   RawStacksResult* raw_stacks) {
+    if (raw_self != nullptr) {
+        *raw_self = {{}, "the sampler is Windows only"};
+    }
+    if (raw_stacks != nullptr) {
+        *raw_stacks = {{}, "the sampler is Windows only"};
+    }
     return "the sampler is Windows only";
 }
 } // namespace Nx2Sampler

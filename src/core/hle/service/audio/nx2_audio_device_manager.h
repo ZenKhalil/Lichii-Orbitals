@@ -19,6 +19,8 @@
 #include <fmt/ranges.h>
 
 #include "common/string_util.h"
+#include "common/fs/path_util.h"
+#include "common/nx2_audio_caller.h"
 #include "audio_core/audio_core.h"
 #include "core/core.h"
 #include "core/core_timing.h"
@@ -190,6 +192,75 @@ private:
      * latency in ns (0x218), device ID (0x220). CreateStream requires a nonzero device ID
      * (Switch Sports failed with 2153-1604 on a zero there).
      */
+    void TracePropertyCaller(HLERequestContext& ctx, u32 functionality,
+                             std::span<const u8> block, std::size_t written) noexcept {
+        namespace Trace = Common::Nx2AudioCaller;
+        if (!Trace::Enabled() || functionality != 1) {
+            return;
+        }
+        static Trace::Budget budget;
+        const auto attempt = budget.Begin();
+        if (!attempt) {
+            return;
+        }
+        try {
+            auto& thread = ctx.GetThread();
+            auto* process = thread.GetOwnerProcess();
+            nlohmann::json record{{"schema", 1}, {"attempt", attempt},
+                {"command", ctx.GetCommand()}, {"functionality", functionality},
+                {"guest_thread_id", thread.GetThreadId()},
+                {"guest_process_id", process ? process->GetProcessId() : 0},
+                {"guest_program_id", process ? process->GetProgramId() : 0},
+                {"device_channels", system.AudioCore().GetOutputSink().GetDeviceChannels()},
+                {"packet_hex", Trace::Hex(block)}, {"requested_bytes", block.size()},
+                {"write_buffer_return_bytes", written}, {"copy_semantics", "WriteBuffer return count; guest copy success is not independently verified"}, {"context_status", "not_captured_busy_or_ineligible"}};
+            const auto& b = ctx.BufferDescriptorB();
+            const auto& c = ctx.BufferDescriptorC();
+            if (!b.empty() && b[0].Size()) {
+                record["buffer"] = {{"kind", "B"}, {"address", b[0].Address()},
+                                     {"capacity", b[0].Size()}};
+            } else if (!c.empty()) {
+                record["buffer"] = {{"kind", "C"}, {"address", c[0].Address()},
+                                     {"capacity", c[0].Size()}};
+            } else {
+                record["buffer"] = {{"kind", "absent"}, {"address", 0}, {"capacity", 0}};
+            }
+            Kernel::Svc::ThreadContext saved{};
+            if (system.DebuggerEnabled()) {
+                record["context_status"] = "debugger_active";
+            } else if (thread.TryCopyWaitingUserContextForDiagnostic(system.Kernel(), saved)) {
+                if (budget.Capture()) {
+                    record["context_status"] = "captured";
+                    auto& memory = ctx.GetMemory();
+                    // The guard has been released. No GPU download, syscall, or suspension here.
+                    const auto read = [&](u64 address, void* data, std::size_t size) {
+                        return Trace::CheckedRange(address, size) &&
+                               memory.IsValidVirtualAddressRange(address, size) &&
+                               memory.ReadBlockUnsafe(address, data, size);
+                    };
+                    record["caller"] = Trace::CaptureMemory(saved.pc, saved.lr, saved.fp,
+                                                            saved.sp, read);
+                    record["still_waiting_after_reads"] =
+                        thread.GetState() == Kernel::ThreadState::Waiting &&
+                        !thread.IsTerminationRequested();
+                } else {
+                    record["context_status"] = "capture_limit";
+                }
+            }
+            std::filesystem::path output;
+            const auto root = Common::FS::GetEdenPath(Common::FS::EdenPath::LogDir) / "audio-caller";
+            if (Trace::WriteArtifact(root, attempt, record, output)) {
+                LOG_INFO(Service_Audio, "bounded audio caller attempt {}: {}", attempt,
+                         output.generic_string());
+            } else {
+                LOG_WARNING(Service_Audio, "bounded audio caller attempt {}: artifact write failed", attempt);
+            }
+        } catch (...) {
+            // Diagnostic errors cannot escape the handler or alter its result/reply.
+        }
+    }
+
+
     void GetVirtualOutputDeviceProperties(HLERequestContext& ctx) {
         IPC::RequestParser rp{ctx};
         const auto functionality = rp.Pop<u32>();
@@ -211,7 +282,8 @@ private:
         const u64 latency_ns = 10'000'000;
         std::memcpy(block.data() + 0x218, &latency_ns, sizeof(latency_ns));
         put32(0x220, input ? 2 : 1);
-        ctx.WriteBuffer(block);
+        const auto written = ctx.WriteBuffer(block);
+        TracePropertyCaller(ctx, functionality, block, written);
         LOG_INFO(Service_Audio, "properties: functionality {}, device {}", functionality,
                  Common::StringFromBuffer(name));
         IPC::ResponseBuilder rb{ctx, 2};
@@ -433,19 +505,63 @@ public:
     }
 
 private:
+    void TraceStreamCreation(HLERequestContext& ctx, u32 device, u32 flags,
+                             u64 applet_resource_user_id, u64 buffer, u64 size,
+                             bool owner_matches, Result result) noexcept {
+        namespace Trace = Common::Nx2AudioCaller;
+        if (!Trace::Enabled()) {
+            return;
+        }
+        static Trace::Budget budget;
+        const auto attempt = budget.Begin();
+        if (!attempt || !budget.Capture()) {
+            return;
+        }
+        try {
+            // Describe the result of the existing validation; never repeat mapping checks.
+            const char* reason = "validation_passed";
+            if (device != 1 && device != 2) {
+                reason = "invalid_device";
+            } else if (!owner_matches) {
+                reason = "owner_mismatch";
+            } else if (result == ResultNotSupported) {
+                reason = "creation_flags_unsupported";
+            } else if (result == ResultInvalidAddressInfo) {
+                reason = "region_invalid";
+            } else if (result.IsFailure()) {
+                reason = "other_validation_failure";
+            }
+            const auto& thread = ctx.GetThread();
+            const auto* owner = thread.GetOwnerProcess();
+            LOG_INFO(Service_Audio,
+                     "bounded CreateStream validation {}: device={} flags={:#x} "
+                     "applet_resource_user_id={:#x} buffer={:#x} size={:#x} input={} "
+                     "owner_matches={} result={:#x} reason={} guest_process={} "
+                     "guest_thread={} guest_program={:#x}",
+                     attempt, device, flags, applet_resource_user_id, buffer, size, device == 2,
+                     owner_matches, result.raw, reason, owner ? owner->GetProcessId() : 0,
+                     thread.GetThreadId(), owner ? owner->GetProgramId() : 0);
+        } catch (...) {
+            // Diagnostic formatting/logging failure cannot change the original reply.
+        }
+    }
+
+
     /// Create an owned input or output stream after validating its device and guest ring region.
     void CreateStream(HLERequestContext& ctx) {
         IPC::RequestParser rp{ctx};
         const auto device = rp.Pop<u32>();
         const auto flags = rp.Pop<u32>();
-        [[maybe_unused]] const auto applet_resource_user_id = rp.Pop<u64>();
+        const auto applet_resource_user_id = rp.Pop<u64>();
         const auto buffer = rp.Pop<u64>();
         const auto size = rp.Pop<u64>();
+        const bool owner_matches = ctx.GetThread().GetOwnerProcess() == process.GetPointerUnsafe();
         Result result = ResultInvalidArgument;
-        if ((device == 1 || device == 2) &&
-            ctx.GetThread().GetOwnerProcess() == process.GetPointerUnsafe()) {
+        if ((device == 1 || device == 2) && owner_matches) {
             result = SysmixOutput::ValidateRegion(*process, buffer, size, flags, device == 2);
         }
+        TraceStreamCreation(ctx, device, flags, applet_resource_user_id, buffer, size,
+                            owner_matches, result);
         if (result.IsFailure()) {
             IPC::ResponseBuilder rb{ctx, 2};
             rb.Push(result);

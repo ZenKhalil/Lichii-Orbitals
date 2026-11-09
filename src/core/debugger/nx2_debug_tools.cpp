@@ -481,9 +481,28 @@ json SampleThreads(ToolState& state, const json& params) {
     std::filesystem::create_directories(state.dump_directory);
     const auto path =
         state.dump_directory / fmt::format("samples-{}-{:03}.txt", state.session, ++state.samples);
-    std::string report = Nx2Sampler::Sample(threads.c_str(), seconds, path.string());
+    const bool raw_self = params.value("raw_self", false);
+    const bool raw_stacks = params.value("raw_stacks", false);
+    Nx2Sampler::RawSelfResult raw_result;
+    Nx2Sampler::RawStacksResult stacks_result;
+    std::string report = Nx2Sampler::Sample(threads.c_str(), seconds, path.string(),
+                                          raw_self ? &raw_result : nullptr,
+                                          raw_stacks ? &stacks_result : nullptr);
     report.resize((std::min)(report.size(), Param<size_t>(params, "max_chars", 60000, 0, 4000000)));
-    return {{"file", path.generic_string()}, {"report", std::move(report)}};
+    json result = {{"file", path.generic_string()}, {"report", std::move(report)}};
+    if (raw_self) {
+        result["raw_self_file"] = raw_result.file;
+        if (!raw_result.error.empty()) {
+            result["raw_self_error"] = raw_result.error;
+        }
+    }
+    if (raw_stacks) {
+        result["raw_stacks_file"] = stacks_result.file;
+        if (!stacks_result.error.empty()) {
+            result["raw_stacks_error"] = stacks_result.error;
+        }
+    }
+    return result;
 }
 
 json ReadMemory(ToolState& state, const json& params) {

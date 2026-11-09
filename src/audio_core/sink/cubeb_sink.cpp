@@ -4,6 +4,10 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdarg>
+#include <cstdio>
+#include <cstdlib>
+#include <mutex>
 #include <span>
 #include <vector>
 
@@ -20,6 +24,77 @@
 #endif
 
 namespace AudioCore::Sink {
+namespace {
+bool CubebTraceEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_CUBEB_TRACE");
+        return value && value[0] == '1' && value[1] == '\0';
+    }();
+    return enabled;
+}
+
+// Cubeb invokes this from backend threads: keep formatting bounded and never call back into Cubeb.
+void CubebLogCallback(const char* format, ...) {
+    char message[2048]{};
+    va_list args;
+    va_start(args, format);
+    const int length = std::vsnprintf(message, sizeof(message), format, args);
+    va_end(args);
+    if (length >= 0) {
+        try {
+            LOG_INFO(Audio_Sink, "Cubeb backend: {}", message);
+        } catch (...) {
+            // Diagnostics must not unwind through Cubeb's C callback boundary.
+        }
+    }
+}
+
+// Cubeb logging is global, and destroying even a temporary enumeration context disables it.
+// Serialize local context lifetimes only when tracing, then restore logging for surviving contexts.
+std::mutex cubeb_trace_mutex;
+std::size_t cubeb_trace_contexts{};
+
+void ArmCubebTrace() {
+    const int result = cubeb_set_log_callback(CUBEB_LOG_NORMAL, CubebLogCallback);
+    // An already registered callback is expected when another context is alive.
+    if (result != CUBEB_OK && result != CUBEB_ERROR_NOT_SUPPORTED) {
+        LOG_WARNING(Audio_Sink, "Could not enable Cubeb backend trace: {}", result);
+    }
+}
+
+int InitCubebContext(cubeb** context, const char* name) {
+    if (!CubebTraceEnabled()) {
+        return cubeb_init(context, name, nullptr);
+    }
+    const std::scoped_lock lock{cubeb_trace_mutex};
+    ArmCubebTrace();
+    const int result = cubeb_init(context, name, nullptr);
+    if (result == CUBEB_OK) {
+        ++cubeb_trace_contexts;
+    }
+    if (cubeb_trace_contexts) {
+        ArmCubebTrace();
+    } else {
+        cubeb_set_log_callback(CUBEB_LOG_DISABLED, nullptr);
+    }
+    return result;
+}
+
+void DestroyCubebContext(cubeb* context) {
+    if (!CubebTraceEnabled()) {
+        cubeb_destroy(context);
+        return;
+    }
+    const std::scoped_lock lock{cubeb_trace_mutex};
+    cubeb_destroy(context);
+    if (context && cubeb_trace_contexts) {
+        --cubeb_trace_contexts;
+    }
+    if (cubeb_trace_contexts) {
+        ArmCubebTrace();
+    }
+}
+} // namespace
 /**
  * Cubeb sink stream, responsible for sinking samples to hardware.
  */
@@ -206,15 +281,22 @@ private:
     }
 
     /**
-     * Cubeb callback for if a device state changes. Unused currently.
+     * Cubeb callback for device state changes and fatal backend errors.
      *
      * @param stream      - Cubeb-specific data about the stream.
      * @param user_data   - Custom data pointer passed along, points to a CubebSinkStream.
      * @param state       - New state of the device.
      */
-    static void StateCallback(cubeb_stream*, void* user_data, cubeb_state state) {
+    static void StateCallback(cubeb_stream* stream, void* user_data, cubeb_state state) {
         if (state == CUBEB_STATE_ERROR) {
-            static_cast<CubebSinkStream*>(user_data)->MarkFaulted();
+            auto* impl = static_cast<CubebSinkStream*>(user_data);
+            impl->MarkFaulted();
+            try {
+                LOG_ERROR(Audio_Sink, "Cubeb stream ERROR: name={} type={} backend={}", impl->name,
+                          static_cast<int>(impl->type), static_cast<const void*>(stream));
+            } catch (...) {
+                // Preserve the fault transition even if diagnostic logging cannot allocate.
+            }
         }
     }
 
@@ -235,7 +317,7 @@ CubebSink::CubebSink(std::string_view target_device_name) {
     com_init_result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 #endif
 
-    if (cubeb_init(&ctx, "Eden", nullptr) != CUBEB_OK) {
+    if (InitCubebContext(&ctx, "Eden") != CUBEB_OK) {
         LOG_CRITICAL(Audio_Sink, "cubeb_init failed");
         return;
     }
@@ -294,7 +376,7 @@ CubebSink::~CubebSink() {
         sink_stream.reset();
     }
 
-    cubeb_destroy(ctx);
+    DestroyCubebContext(ctx);
 
 #ifdef _WIN32
     if (SUCCEEDED(com_init_result)) {
@@ -355,7 +437,7 @@ std::vector<std::string> ListCubebSinkDevices(bool capture) {
     auto com_init_result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 #endif
 
-    if (cubeb_init(&ctx, "Eden Device Enumerator", nullptr) != CUBEB_OK) {
+    if (InitCubebContext(&ctx, "Eden Device Enumerator") != CUBEB_OK) {
         LOG_CRITICAL(Audio_Sink, "cubeb_init failed");
         return {};
     }
@@ -381,7 +463,7 @@ std::vector<std::string> ListCubebSinkDevices(bool capture) {
         cubeb_device_collection_destroy(ctx, &collection);
     }
 
-    cubeb_destroy(ctx);
+    DestroyCubebContext(ctx);
     return device_list;
 }
 
@@ -394,7 +476,7 @@ u32 GetCubebLatency() {
 #endif
 
     // Init cubeb
-    if (cubeb_init(&ctx, "yuzu Latency Getter", nullptr) != CUBEB_OK) {
+    if (InitCubebContext(&ctx, "yuzu Latency Getter") != CUBEB_OK) {
         LOG_CRITICAL(Audio_Sink, "cubeb_init failed");
         // Return a large latency so we choose SDL instead.
         return 10000u;
@@ -421,7 +503,7 @@ u32 GetCubebLatency() {
         latency = TargetSampleCount * 2;
     }
     latency = (std::max)(latency, TargetSampleCount * 2);
-    cubeb_destroy(ctx);
+    DestroyCubebContext(ctx);
     return latency;
 }
 

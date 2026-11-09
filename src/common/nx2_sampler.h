@@ -15,8 +15,20 @@ namespace Nx2Sampler {
 // (default nx2_samples.txt).
 void StartFromEnvironment();
 
+struct RawSelfResult {
+    std::string file;
+    std::string error;
+};
+
+// The raw stack sidecar uses the same file/error result shape.
+using RawStacksResult = RawSelfResult;
+
 /// Samples the named threads for `seconds` now (blocking), writes the report to `out` (and
 /// the folded stacks to `out`.folded) and returns the report.
-std::string Sample(const char* names, double seconds, const std::string& out);
+// Passing raw_self requests a bounded .self.json sidecar with complete-or-explicitly-truncated
+// valid RIP counts. Passing raw_stacks exports exact captured stacks to .stacks.json;
+// this does not guarantee a complete unwind. Both defaults preserve existing output.
+std::string Sample(const char* names, double seconds, const std::string& out,
+                   RawSelfResult* raw_self = nullptr, RawStacksResult* raw_stacks = nullptr);
 
 } // namespace Nx2Sampler

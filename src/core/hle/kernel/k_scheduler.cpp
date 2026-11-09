@@ -21,6 +21,7 @@
 #include "core/hle/kernel/k_thread.h"
 #include "core/hle/kernel/kernel.h"
 #include "core/hle/kernel/physical_core.h"
+#include "core/hle/kernel/vi2_pressure.h"
 
 namespace Kernel {
 
@@ -318,6 +319,26 @@ u64 KScheduler::UpdateHighestPriorityThreadsImpl(KernelCore& kernel) {
     KThread* const cur_thread = GetCurrentThreadPointer(kernel);
     if (cur_thread->IsDummyThread() && cur_thread->GetState() != ThreadState::Runnable) {
         cur_thread->RequestDummyThreadWait(kernel);
+    }
+
+    if (Vi2Pressure::enabled) {
+        const auto classify = [](const KThread& thread) {
+            const auto* owner = thread.GetOwnerProcess();
+            if (owner && owner->IsApplication()) return Vi2Pressure::Kind::Application;
+            if (owner && thread.GetThreadType() == ThreadType::HighPriority)
+                return Vi2Pressure::Kind::Hle;
+            return Vi2Pressure::Kind::Other;
+        };
+        const auto pinned = [](const KThread& thread) {
+            const auto* owner = thread.GetOwnerProcess();
+            return owner && owner->GetPinnedThread(3) != nullptr;
+        };
+        Vi2Pressure::publication.TryPublish(Vi2Pressure::Now(), [&] {
+            auto snapshot = Vi2Pressure::CountQueue(
+                priority_queue, kernel.Scheduler(3).GetSchedulerCurrentThread(), classify, pinned);
+            snapshot.kernel_tag = reinterpret_cast<std::uintptr_t>(&kernel);
+            return snapshot;
+        });
     }
 
     return cores_needing_scheduling;

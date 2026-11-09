@@ -31,6 +31,7 @@
 #include "common/dkb_frame_trace.h"
 #include "common/game_presets.h"
 #include "common/settings.h"
+#include "common/scope_exit.h"
 #include "common/thread.h"
 #include "core/core.h"
 #include "core/arm/dynarmic/window_trace.h"
@@ -55,6 +56,7 @@
 #include "core/hle/kernel/k_readable_event.h"
 #include "core/hle/kernel/k_session.h"
 #include "core/hle/kernel/k_thread.h"
+#include "core/hle/kernel/vi2_pressure.h"
 #include "core/hle/kernel/k_transfer_memory.h"
 #include "core/hle/kernel/svc_results.h"
 #include "core/memory.h"
@@ -2028,6 +2030,40 @@ private:
         // command buffers ahead misses the equal-value gates its other channels acquire.
         const auto deadline = start + std::chrono::milliseconds{4000};
         if (!syncpoints.IsReadyGuest(fence_id, fence_value)) {
+            u64 pressure_thread{};
+            bool pressure_core3{};
+            if (Kernel::Vi2Pressure::enabled) {
+                const auto& thread = Kernel::GetCurrentThread(system.Kernel());
+                pressure_thread = thread.GetThreadId();
+                pressure_core3 = thread.GetThreadType() == Kernel::ThreadType::HighPriority &&
+                                 Kernel::GetCurrentCoreId(system.Kernel()) == 3;
+            }
+            Kernel::Vi2Pressure::WaitScope pressure{
+                Kernel::Vi2Pressure::enabled, reinterpret_cast<std::uintptr_t>(&system.Kernel()),
+                pressure_thread, pressure_core3};
+            SCOPE_EXIT {
+                if (const auto report = pressure.Finish()) {
+                    // After releasing the wake mutex; no logger or kernel lock in sampling.
+                    try {
+                        const auto& o = pressure.observations;
+                        LOG_INFO(Service,
+                            "VI2 pressure cumulative: core3_waits={} wall_ms={} other_waits={} "
+                            "other_wall_ms={} observations={} app_scheduled_present={} "
+                            "app_scheduled_zero={} pre_wait_snapshot={} stale={} "
+                            "unknown={} capped={} identity_mismatch={} pinned={} "
+                            "last_present={} fence=({}, {}) auto={} service={} core3={} "
+                            "last_ms={} last_samples={} last_app_max={} last_hle_max={} "
+                            "last_min_priority={} last_max_age_ms={} last_generation={}",
+                            report->waits, report->wait_ns / 1e6, report->other_waits,
+                            report->other_ns / 1e6, report->samples, report->positive, report->zero,
+                            report->pre_wait, report->stale, report->unknown, report->capped, report->mismatch,
+                            report->pinned, m_presents, fence_id, fence_value, unless_gpu_waits,
+                            pressure_thread, pressure_core3, report->last_ns / 1e6, o.samples,
+                            o.max_application, o.max_hle, o.min_priority, o.max_age / 1e6,
+                            o.last_generation);
+                    } catch (...) {}
+                }
+            };
             // Woken by the GPU thread as it reaches the fence. Polling with 200 us sleeps slept
             // about 1 ms per check on Windows, added to every frame. An action left registered
             // after a timeout fires later on a state nobody waits on.
@@ -2058,6 +2094,7 @@ private:
                     }
                 }
                 wake->cv.wait_for(lk, std::chrono::milliseconds{unless_gpu_waits ? 1 : 50});
+                pressure.Observe();
             }
         }
         if (unless_gpu_waits && !syncpoints.IsReadyGuest(fence_id, fence_value)) {

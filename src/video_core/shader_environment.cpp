@@ -38,6 +38,7 @@
 #include "video_core/engines/kepler_compute.h"
 #include "video_core/memory_manager.h"
 #include "video_core/nx2_debug_control.h"
+#include "video_core/native_shader_failure_dump.h"
 #include "video_core/native_shader_source.h"
 #include "video_core/shader_environment.h"
 #include "video_core/texture_cache/format_lookup_table.h"
@@ -677,6 +678,37 @@ std::shared_ptr<const LoweredNativeCode> GenericEnvironment::LowerNativeCode(u32
         }
     }
     if (!lowered) {
+        // Capture only existing compiler inputs. sph is the 80-byte header read when the
+        // environment was constructed; native instructions start after 128 bytes, so the
+        // unread 48-byte extension is deliberately absent from this diagnostic.
+        // This branch already existed: successful lowerings do no diagnostic work.
+        try {
+            const auto failure = NativeShaderFailureDump::Capture({
+                .native_code = std::as_bytes(std::span{native}),
+                .captured_header = source_header_size == 0
+                                       ? std::span<const std::byte>{}
+                                       : std::as_bytes(std::span{&sph, 1}),
+                .verified_traps = std::as_bytes(std::span{verified_traps}),
+                .program_base = program_base,
+                .native_header_skip = source_header_size,
+                .captured_header_offset = start_address,
+                .stage = static_cast<std::uint32_t>(stage),
+                .tessellation_stage = static_cast<std::uint32_t>(tessellation_stage),
+                .geometry = geometry_stage,
+                .tensor = true,
+                .error_offset = lowered.error_offset,
+                .reason = lowered.error,
+            });
+            if (failure.status == NativeShaderFailureDump::Status::Written) {
+                LOG_WARNING(Shader, "Captured failed native compiler input at {:#x}: {}",
+                            program_base, failure.directory.string());
+            } else if (failure.status == NativeShaderFailureDump::Status::Failed) {
+                LOG_WARNING(Shader, "Could not capture failed native compiler input at {:#x}",
+                            program_base);
+            }
+        } catch (...) {
+            // Even diagnostic logging/allocation failure must preserve the original rejection.
+        }
         if (const char* directory = std::getenv("EDEN_NATIVE_SHADER_OVERRIDE_DIR")) {
             const auto key = fmt::format("{:016x}", Shader::Ampere::NativeProgramKey(native));
             const auto folder = std::filesystem::path{directory};

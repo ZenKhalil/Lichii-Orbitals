@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
 #include <mutex>
 #include <set>
 #include <cstdlib>
@@ -85,6 +86,28 @@ void Fermi2D::Blit() {
     }
     LOG_DEBUG(HW_GPU, "called. source address={:#x}, destination address={:#x}", regs.src.Address(), regs.dst.Address());
 
+    static const bool trace_depth = std::getenv("EDEN_NX2_2D_DEPTH_TRACE") != nullptr;
+    u32 depth_trace_id{};
+    if (trace_depth && (regs.src.depth != 1 || regs.dst.depth != 1)) {
+        static std::atomic<u32> traced_depth{};
+        const u32 index = traced_depth.fetch_add(1, std::memory_order_relaxed);
+        if (index < 128) {
+            depth_trace_id = index + 1;
+            const auto log_surface = [&](const char* side, const Surface& surface) {
+                LOG_INFO(HW_GPU,
+                         "NX2_2D_DEPTH n={} {} address={:#x} format={:#x} layout={} "
+                         "width={} height={} depth={} layer={} pitch={} block_width={} "
+                         "block_height={} block_depth={}",
+                         depth_trace_id, side, surface.Address(), static_cast<u32>(surface.format),
+                         static_cast<u32>(surface.linear), surface.width, surface.height,
+                         surface.depth, surface.layer, surface.pitch, surface.block_width.Value(),
+                         surface.block_height.Value(), surface.block_depth.Value());
+            };
+            log_surface("src", regs.src);
+            log_surface("dst", regs.dst);
+        }
+    }
+
     UNIMPLEMENTED_IF_MSG(regs.operation != Operation::SrcCopy, "Operation is not copy");
     UNIMPLEMENTED_IF_MSG(regs.src.layer != 0, "Source layer is not zero");
     UNIMPLEMENTED_IF_MSG(regs.dst.layer != 0, "Destination layer is not zero");
@@ -155,7 +178,21 @@ void Fermi2D::Blit() {
     }
 
     memory_manager.FlushCaching();
-    if (!rasterizer->AccelerateSurfaceCopy(src, regs.dst, config)) {
+    if (depth_trace_id != 0) {
+        LOG_INFO(HW_GPU,
+                 "NX2_2D_DEPTH n={} config src=({},{})-({},{}) dst=({},{})-({},{}) "
+                 "du_dx={} dv_dy={} src_x0_raw={} src_y0_raw={} operation={} filter={} "
+                 "must_accelerate={} aligned_src_address={:#x} aligned_src_width={}",
+                 depth_trace_id, config.src_x0, config.src_y0, config.src_x1, config.src_y1,
+                 config.dst_x0, config.dst_y0, config.dst_x1, config.dst_y1, args.du_dx,
+                 args.dv_dy, args.src_x0, args.src_y0, static_cast<u32>(config.operation),
+                 static_cast<u32>(config.filter), config.must_accelerate, src.Address(), src.width);
+    }
+    const bool accelerated = rasterizer->AccelerateSurfaceCopy(src, regs.dst, config);
+    if (depth_trace_id != 0) {
+        LOG_INFO(HW_GPU, "NX2_2D_DEPTH n={} accelerated={}", depth_trace_id, accelerated);
+    }
+    if (!accelerated) {
         sw_blitter->Blit(src, regs.dst, config);
     }
 }

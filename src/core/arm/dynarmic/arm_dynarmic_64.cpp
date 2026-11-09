@@ -10,6 +10,7 @@
 #include <immintrin.h>
 #endif
 #include "common/settings.h"
+#include "common/cpu_read_timing.h"
 #include "core/arm/dynarmic/arm_dynarmic.h"
 #include "core/arm/dynarmic/arm_dynarmic_64.h"
 #include "core/arm/dynarmic/dynarmic_exclusive_monitor.h"
@@ -459,14 +460,37 @@ void ArmDynarmic64::MakeJit(Common::PageTable* page_table, std::size_t address_s
     m_jit.emplace(config);
 }
 
+namespace {
+void ReportCpuReadTiming() {
+    const auto sample = Common::CpuReadTiming::PollReport();
+    if (!sample) return;
+    const auto& s = *sample;
+    try {
+        LOG_INFO(Core_ARM,
+                 "CPU read timing cumulative (all callers, no monitor attribution): elapsed_s={} "
+                 "started={} completed={} aborted={} in_flight={} reactive={} preemptive={} "
+                 "lookup_ms={} queue_ms={} wait_ms={} total_ms={} max_total_ms={} max_wait_ms={}",
+                 s.elapsed_ns / 1e9, s.started, s.completed, s.aborted, s.in_flight,
+                 s.reactive, s.preemptive, s.lookup_ns / 1e6, s.queue_ns / 1e6,
+                 s.wait_ns / 1e6, s.total_ns / 1e6, s.max_total_ns / 1e6, s.max_wait_ns / 1e6);
+    } catch (...) {
+        // Optional diagnostics must not interrupt guest execution if logging fails.
+    }
+}
+} // namespace
+
 HaltReason ArmDynarmic64::RunThread(Kernel::KThread* thread) {
     m_jit->ClearExclusiveState();
-    return TranslateHaltReason(m_jit->Run());
+    const auto result = m_jit->Run();
+    ReportCpuReadTiming(); // JIT callbacks and their monitor scopes have returned.
+    return TranslateHaltReason(result);
 }
 
 HaltReason ArmDynarmic64::StepThread(Kernel::KThread* thread) {
     m_jit->ClearExclusiveState();
-    return TranslateHaltReason(m_jit->Step());
+    const auto result = m_jit->Step();
+    ReportCpuReadTiming(); // JIT callbacks and their monitor scopes have returned.
+    return TranslateHaltReason(result);
 }
 
 u32 ArmDynarmic64::GetSvcNumber() const {
