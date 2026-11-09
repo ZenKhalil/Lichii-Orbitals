@@ -3,6 +3,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <array>
 #include <bitset>
 #include <chrono>
@@ -10,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "core/core.h"
 #include "core/core_timing.h"
@@ -143,4 +145,113 @@ TEST_CASE("CoreTiming[BasicOrderNoPausing]", "[core]") {
     printf("HostTimer No Pausing Scheduling Time: %.3f %.6f\n", micro, mili);
     printf("HostTimer No Pausing Timer Time: %.3f %.6f\n", timer_time / 1000.f,
            timer_time / 1000000.f);
+}
+
+TEST_CASE("CoreTiming looping deadlines exclude paused time", "[core][timing_pause]") {
+    using namespace std::chrono_literals;
+    Core::Timing::CoreTiming timing;
+    timing.SetMulticore(false);
+    timing.Initialize([] {});
+    std::vector<std::pair<s64, s64>> calls;
+    auto event = Core::Timing::CreateEvent(
+        "skip missed ticks", [&](s64 scheduled, std::chrono::nanoseconds late) {
+            calls.emplace_back(scheduled, late.count());
+            const auto missed = std::max(late, 0ns) / 5ms;
+            return std::optional<std::chrono::nanoseconds>{5ms * (missed + 1)};
+        });
+    timing.ScheduleLoopingEvent(5ms, 5ms, event);
+    timing.cpu_ticks = Common::WallClock::CPUTickFreq * 100;
+    timing.Pause(false);
+    const auto resumed = timing.GetGlobalTimeNs().count();
+    s64 delay_ms{};
+    SECTION("first callback at resume") {}
+    SECTION("first callback twelve milliseconds after resume") { delay_ms = 12; }
+    timing.cpu_ticks += Common::WallClock::CPUTickFreq / 1000 * delay_ms;
+    const auto now = timing.GetGlobalTimeNs().count();
+    const auto next = timing.Advance();
+    REQUIRE(calls.size() == 1);
+    REQUIRE(calls[0].first == resumed);
+    REQUIRE(calls[0].second == now - resumed);
+    const auto next_ms = (delay_ms / 5 + 1) * 5;
+    REQUIRE(next == resumed + next_ms * 1'000'000);
+
+    timing.cpu_ticks = Common::WallClock::CPUTickFreq * 100 +
+                       Common::WallClock::CPUTickFreq / 1000 * next_ms;
+    REQUIRE(timing.Advance() == next.value() + 5'000'000);
+    REQUIRE(calls.size() == 2);
+    REQUIRE(calls[1].first == next.value());
+    REQUIRE(calls[1].second == 0);
+}
+
+TEST_CASE("CoreTiming looping deadlines still skip ordinary late ticks", "[core][timing_pause]") {
+    using namespace std::chrono_literals;
+    Core::Timing::CoreTiming timing;
+    timing.SetMulticore(false);
+    timing.Initialize([] {});
+    std::vector<std::pair<s64, s64>> calls;
+    auto event = Core::Timing::CreateEvent(
+        "ordinary late tick", [&](s64 scheduled, std::chrono::nanoseconds late) {
+            calls.emplace_back(scheduled, late.count());
+            return std::optional<std::chrono::nanoseconds>{5ms * (late / 5ms + 1)};
+        });
+    timing.Pause(false);
+    timing.ScheduleLoopingEvent(5ms, 5ms, event);
+    timing.cpu_ticks = Common::WallClock::CPUTickFreq / 1000 * 17;
+    REQUIRE(timing.Advance() == 20'000'000);
+    REQUIRE(calls.size() == 1);
+    REQUIRE(calls[0].first == 5'000'000);
+    REQUIRE(calls[0].second == 12'000'000);
+    timing.cpu_ticks = Common::WallClock::CPUTickFreq / 1000 * 20;
+    REQUIRE(timing.Advance() == 25'000'000);
+    REQUIRE(calls.size() == 2);
+    REQUIRE(calls[1].first == 20'000'000);
+    REQUIRE(calls[1].second == 0);
+}
+
+TEST_CASE("CoreTiming fixed-period loops resume without paused lateness", "[core][timing_pause]") {
+    using namespace std::chrono_literals;
+    Core::Timing::CoreTiming timing;
+    timing.SetMulticore(false);
+    timing.Initialize([] {});
+    std::vector<std::pair<s64, s64>> calls;
+    auto event = Core::Timing::CreateEvent(
+        "fixed period", [&](s64 scheduled, std::chrono::nanoseconds late)
+                            -> std::optional<std::chrono::nanoseconds> {
+            calls.emplace_back(scheduled, late.count());
+            return std::nullopt;
+        });
+    timing.ScheduleLoopingEvent(5ms, 5ms, event);
+    timing.cpu_ticks = Common::WallClock::CPUTickFreq * 100;
+    timing.Pause(false);
+    const auto resumed = timing.GetGlobalTimeNs().count();
+    REQUIRE(timing.Advance() == resumed + 5'000'000);
+    REQUIRE(calls.size() == 1);
+    REQUIRE(calls[0].first == resumed);
+    REQUIRE(calls[0].second == 0);
+    timing.cpu_ticks += Common::WallClock::CPUTickFreq / 200;
+    REQUIRE(timing.Advance() == resumed + 10'000'000);
+    REQUIRE(calls.size() == 2);
+    REQUIRE(calls[1].first == resumed + 5'000'000);
+    REQUIRE(calls[1].second == 0);
+}
+
+TEST_CASE("CoreTiming one-shot deadlines retain paused lateness", "[core][timing_pause]") {
+    using namespace std::chrono_literals;
+    Core::Timing::CoreTiming timing;
+    timing.SetMulticore(false);
+    timing.Initialize([] {});
+    std::vector<std::pair<s64, s64>> calls;
+    auto event = Core::Timing::CreateEvent(
+        "one-shot", [&](s64 scheduled, std::chrono::nanoseconds late)
+                        -> std::optional<std::chrono::nanoseconds> {
+            calls.emplace_back(scheduled, late.count());
+            return std::nullopt;
+        });
+    timing.ScheduleEvent(5ms, event);
+    timing.cpu_ticks = Common::WallClock::CPUTickFreq * 100;
+    timing.Pause(false);
+    REQUIRE_FALSE(timing.Advance().has_value());
+    REQUIRE(calls.size() == 1);
+    REQUIRE(calls[0].first == 5'000'000);
+    REQUIRE(calls[0].second == 99'995'000'000);
 }

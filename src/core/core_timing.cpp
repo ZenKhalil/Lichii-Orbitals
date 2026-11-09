@@ -264,10 +264,15 @@ std::optional<s64> CoreTiming::Advance() {
 
                 basic_lock.lock();
             } else {
+                // Rebase paused deadlines before calculating lateness, so callbacks that skip
+                // missed ticks do not include the paused time in their next interval.
+                const auto scheduled_time =
+                    std::max(evt_time, pause_end_time.load(std::memory_order_relaxed));
                 basic_lock.unlock();
 
                 const auto new_schedule_time{event_type->callback(
-                    evt_time, std::chrono::nanoseconds{GetGlobalTimeNs().count() - evt_time})};
+                    scheduled_time,
+                    std::chrono::nanoseconds{GetGlobalTimeNs().count() - scheduled_time})};
 
                 basic_lock.lock();
 
@@ -280,12 +285,7 @@ std::optional<s64> CoreTiming::Advance() {
                                                   ? new_schedule_time.value().count()
                                                   : evt.reschedule_time};
 
-                // If this event was scheduled into a pause, its time now is going to be way
-                // behind. Re-set this event to continue from the end of the pause.
-                auto next_time{evt.time + next_schedule_time};
-                if (evt.time < pause_end_time) {
-                    next_time = pause_end_time + next_schedule_time;
-                }
+                const auto next_time = scheduled_time + next_schedule_time;
 
                 event_queue.update(evt.handle, Event{next_time, event_fifo_id++, evt.type,
                                                      next_schedule_time, evt.handle});
