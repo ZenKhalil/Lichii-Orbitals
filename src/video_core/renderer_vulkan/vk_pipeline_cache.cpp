@@ -56,6 +56,8 @@
 #include "video_core/renderer_vulkan/vk_update_descriptor.h"
 #include "video_core/shader_cache.h"
 #include "video_core/shader_environment.h"
+#include "video_core/graphics_input_capture.h"
+#include "video_core/renderer_vulkan/typed_uniform_buffer.h"
 #include "video_core/shader_notify.h"
 #include "video_core/surface.h"
 #include "video_core/vulkan_common/vulkan_device.h"
@@ -350,9 +352,13 @@ vk::ShaderModule EmitShaderModule(const Device& device, const Shader::Profile& p
                                  const Shader::RuntimeInfo& runtime_info,
                                  Shader::IR::Program& program, Shader::Backend::Bindings& binding,
                                  u64 shader_hash, size_t stage_index,
-                                 std::span<const u32> reference = {}) {
+                                 std::span<const u32> reference = {},
+                                 std::vector<u32>* captured_code = nullptr) {
     const auto code =
         EmitPipelineShader(profile, runtime_info, program, binding, shader_hash, reference);
+    if (captured_code) {
+        *captured_code = code;
+    }
     device.SaveShader(code);
     vk::ShaderModule module{BuildShader(device, code)};
 
@@ -1520,6 +1526,15 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
     const bool uses_vertex_a{key.unique_hashes[0] != 0};
     const bool uses_vertex_b{key.unique_hashes[1] != 0};
 
+    const Shader::HostTranslateInfo uniform_host_info{host_info};
+    const Shader::Profile uniform_profile{profile};
+    const Shader::Maxwell::TranslationOptions uniform_options{
+        .enable_rescaling = Settings::values.resolution_info.active,
+        .verify_ir = Settings::values.renderer_debug.GetValue(),
+    };
+    const bool uniform_loop_safety = !Settings::values.disable_shader_loop_safety_checks;
+    std::unique_ptr<VideoCommon::GraphicsInputCapture> uniform_capture;
+
     // Layer passthrough generation for devices without VK_EXT_shader_viewport_index_layer
     Shader::IR::Program* layer_source_program{};
     bool mesh_unsupported{};
@@ -1536,8 +1551,14 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
         if (key.unique_hashes[index] == 0) {
             continue;
         }
-        Shader::Environment& env{*envs[env_index]};
+        Shader::Environment* selected_env = envs[env_index];
         ++env_index;
+        if (!uses_vertex_a && index == 1 &&
+            selected_env->ShaderStage() == Shader::Stage::VertexB && selected_env->IsNativeProgram()) {
+            uniform_capture = std::make_unique<VideoCommon::GraphicsInputCapture>(*selected_env);
+            selected_env = uniform_capture.get();
+        }
+        Shader::Environment& env{*selected_env};
         if (index == static_cast<size_t>(Maxwell::ShaderType::Geometry) &&
             !device.IsGeometryShaderSupported() && env.IsNativeProgram()) {
             // A native (Switch 2) geometry program on a device without geometry shaders: the
@@ -1569,7 +1590,9 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
         Shader::Maxwell::Flow::CFG cfg(env, pools.flow_block, cfg_offset, index == 0);
         if (!uses_vertex_a || index != 1) {
             // Normal path
-            programs[index] = TranslateProgram(pools.inst, pools.block, env, cfg, host_info);
+            programs[index] = TranslateProgram(pools.inst, pools.block, env, cfg,
+                uniform_capture && index == 1 ? uniform_host_info : host_info,
+                uniform_capture && index == 1 ? &uniform_options : nullptr);
         } else {
             // VertexB path when VertexA is present.
             auto& program_va{programs[0]};
@@ -1757,6 +1780,56 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
                 storage_buffers, set_limit);
         }
     }
+    bool uniform_family = uniform_capture && !uses_vertex_a && !mesh_emulation &&
+                          layer_source_program == nullptr &&
+                          IsSingleVertexUniformFetch(programs[1]);
+    for (size_t index = 2; index < programs.size() && uniform_family; ++index) {
+        if (key.unique_hashes[index] != 0) {
+            uniform_family = programs[index].stage != Shader::Stage::Task &&
+                             programs[index].stage != Shader::Stage::Mesh &&
+                             programs[index].info.texture_buffer_descriptors.empty();
+        }
+    }
+    std::array<bool, 3> uniform_formats{};
+    if (uniform_family) {
+        for (size_t index = 0; index < uniform_formats.size(); ++index) {
+            uniform_formats[index] =
+                (device.GetPhysical().GetFormatProperties(TypedUniformFormats[index]).bufferFeatures &
+                 VK_FORMAT_FEATURE_UNIFORM_TEXEL_BUFFER_BIT) != 0;
+        }
+        uniform_family = std::ranges::any_of(uniform_formats, [](bool value) { return value; });
+    }
+    std::optional<VideoCommon::GraphicsInputCapture::Snapshot> uniform_snapshot;
+    if (uniform_family) {
+        try {
+            uniform_snapshot.emplace(uniform_capture->CreateSnapshot());
+        } catch (const Shader::Exception& exception) {
+            LOG_WARNING(Render_Vulkan, "Vertex texel family unavailable {:016x}: {}",
+                        key.unique_hashes[1], exception.what());
+            uniform_family = false;
+        }
+    }
+    if (TexelTypeTrace::Enabled() &&
+        !programs[1].info.texture_buffer_descriptors.empty()) {
+        static std::atomic<u32> reported{};
+        if (reported.fetch_add(1, std::memory_order_relaxed) < 128) {
+            LOG_INFO(Render_Vulkan, "Vertex texel family pipeline={:016x} shader={:016x} eligible={} "
+                     "vertex_stage={} vertex_a={} captured={} single_fetch={} layer_emulation={} "
+                     "mesh_emulation={} formats={}/{}/{}", hash, key.unique_hashes[1],
+                     uniform_family, static_cast<u32>(programs[1].stage), uses_vertex_a,
+                     static_cast<bool>(uniform_capture), IsSingleVertexUniformFetch(programs[1]),
+                     layer_source_program != nullptr, mesh_emulation.has_value(),
+                     uniform_formats[0], uniform_formats[1], uniform_formats[2]);
+        }
+    }
+    std::optional<Shader::Info> uniform_source_info;
+    if (uniform_family) {
+        uniform_source_info = programs[1].info;
+    }
+    std::optional<Shader::RuntimeInfo> uniform_runtime;
+    Shader::Info uniform_converted_info;
+    Shader::Backend::Bindings uniform_binding_begin{}, uniform_binding_end{};
+    std::array<std::vector<u32>, Maxwell::MaxShaderStage> uniform_stage_code;
     std::array<const Shader::Info*, Maxwell::MaxShaderStage> infos{};
     std::array<vk::ShaderModule, Maxwell::MaxShaderStage> modules;
     std::array<std::optional<Shader::RuntimeInfo>, Maxwell::MaxShaderStage> deferred_runtime_infos;
@@ -1795,7 +1868,17 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
                     runtime_info.convert_depth_mode && !profile.support_native_ndc);
             }
         }
+        if (uniform_family) {
+            runtime_info.enable_shader_loop_safety = uniform_loop_safety;
+            if (index == 1) {
+                uniform_runtime = runtime_info;
+                uniform_binding_begin = binding;
+            }
+        }
         ConvertLegacyToGeneric(program, runtime_info);
+        if (uniform_family && index == 1) {
+            uniform_converted_info = program.info;
+        }
         // EDEN_NX2_MESH_EMULATION_DUMP=<dir>: write the emulation's vertex shader for spirv-val.
         // (Emitting the mesh program a second time here to dump its compute shader crashed the
         // build that followed, so only the vertex shader is written.)
@@ -1808,23 +1891,90 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
                            static_cast<std::streamsize>(code.size() * sizeof(u32)));
             }
         }
-        if (emit_pools) {
+        if (emit_pools && !uniform_family) {
             deferred_runtime_infos[stage_index] = runtime_info;
             if (VideoCommon::Nx2Perf::Verify()) {
                 reference_spirv[stage_index] = EmitSPIRV(profile, runtime_info, program, binding);
             }
         } else {
             const auto begin = std::chrono::steady_clock::now();
-            modules[stage_index] = EmitShaderModule(device, profile, runtime_info, program, binding,
-                                                   key.unique_hashes[index], stage_index);
+            modules[stage_index] = EmitShaderModule(device,
+                uniform_family ? uniform_profile : profile, runtime_info, program, binding,
+                key.unique_hashes[index], stage_index, {},
+                uniform_family ? &uniform_stage_code[stage_index] : nullptr);
+            if (uniform_family && index == 1) {
+                uniform_binding_end = binding;
+            }
             if (build_in_parallel) {
                 AddRuntimeSpirvTime(0, begin);
             }
         }
         previous_stage = &program;
     }
+    if (uniform_family) {
+        using Type = Shader::UniformTexelType;
+        std::array<std::array<vk::ShaderModule, Maxwell::MaxShaderStage>, 3> family_modules;
+        family_modules[0] = std::move(modules);
+        const auto same_bindings = [](const auto& left, const auto& right) {
+            return std::tie(left.unified, left.uniform_buffer, left.storage_buffer, left.texture,
+                            left.image, left.texture_scaling_index, left.image_scaling_index) ==
+                   std::tie(right.unified, right.uniform_buffer, right.storage_buffer, right.texture,
+                            right.image, right.texture_scaling_index, right.image_scaling_index);
+        };
+        for (size_t member_index = 1; member_index < family_modules.size(); ++member_index) {
+            auto replay = uniform_snapshot->CreateReplay();
+            ShaderPools replay_pools;
+            Shader::Maxwell::Flow::CFG cfg{replay, replay_pools.flow_block,
+                static_cast<u32>(replay.StartAddress() + sizeof(Shader::ProgramHeader))};
+            auto vertex = TranslateProgram(replay_pools.inst, replay_pools.block, replay, cfg,
+                                            uniform_host_info, &uniform_options);
+            if (!IsSingleVertexUniformFetch(vertex) || vertex.info != *uniform_source_info ||
+                vertex.stage != programs[1].stage ||
+                vertex.local_memory_size != programs[1].local_memory_size) {
+                throw Shader::LogicError("Vertex texel replay changed stage metadata");
+            }
+            auto runtime = *uniform_runtime;
+            ConvertLegacyToGeneric(vertex, runtime);
+            if (vertex.info != uniform_converted_info) {
+                throw Shader::LogicError("Vertex texel replay changed converted linkage");
+            }
+            runtime.uniform_texel_types = {static_cast<Type>(member_index)};
+            auto member_binding = uniform_binding_begin;
+            const auto vertex_code = EmitSPIRV(uniform_profile, runtime, vertex, member_binding);
+            if (vertex.info != programs[1].info ||
+                !same_bindings(member_binding, uniform_binding_end)) {
+                throw Shader::LogicError("Vertex texel emission changed linkage or descriptor order");
+            }
+            for (size_t stage = 0; stage < family_modules[member_index].size(); ++stage) {
+                if (!infos[stage]) {
+                    continue;
+                }
+                const auto& code = stage == 0 ? vertex_code : uniform_stage_code[stage];
+                device.SaveShader(code);
+                family_modules[member_index][stage] = BuildShader(device, code);
+            }
+        }
+        // No worker holds a member during partial construction. Unchanged stages
+        // reuse immutable emitted code, not IR, and each member owns its modules.
+        std::array<std::unique_ptr<GraphicsPipeline>, 3> members;
+        for (size_t index = 0; index < members.size(); ++index) {
+            shader_notify.MarkShaderBuilding();
+            SCOPE_EXIT { shader_notify.MarkShaderComplete(); };
+            members[index] = std::make_unique<GraphicsPipeline>(
+                scheduler, buffer_cache, texture_cache, vulkan_pipeline_cache, nullptr, device,
+                descriptor_pool, guest_descriptor_queue, descriptor_buffer_ring, nullptr,
+                statistics, render_pass_cache, key, std::move(family_modules[index]), infos);
+            if (!members[index]->IsBuilt() || members[index]->Failed()) {
+                throw Shader::RuntimeError("Vertex texel family member failed to build");
+            }
+        }
+        auto base = std::move(members[0]);
+        base->SetUniformFamily(std::move(members), uniform_formats);
+        return base;
+    }
+
     std::function<std::array<vk::ShaderModule, Maxwell::MaxShaderStage>()> emit_stages;
-    if (emit_pools) {
+    if (emit_pools && !uniform_family) {
         auto job = std::make_shared<DeferredStages>();
         job->reservation = std::move(reservation);
         job->pools = emit_pools;

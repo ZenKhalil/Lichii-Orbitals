@@ -62,7 +62,7 @@ void Capture(Scope& scope, const Shader::Info& info, const Identity& identity,
     constexpr bool storage = std::is_same_v<Descriptor, Shader::ImageBufferDescriptor>;
     Row row{};
     row.kind = storage ? Kind::Storage : Kind::Uniform;
-    row.compiled = Numeric::Float;
+    row.compiled = compiled_override != Numeric::Unknown ? compiled_override : Numeric::Float;
     row.compiled_format = ~std::uint32_t{};
     row.read = true;
     if constexpr (storage) {

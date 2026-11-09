@@ -99,6 +99,8 @@ add_executable(tests
     video_core/compute_input_replay.cpp
     video_core/typed_buffer_store.cpp
     video_core/uniform_texel_emitter.cpp
+    video_core/graphics_input_capture.cpp
+    video_core/graphics_uniform_replay.cpp
     video_core/pipeline_cache_files.cpp
     video_core/storage_binding_capacity.cpp
     video_core/native_indirect_reset.cpp
