@@ -6,8 +6,10 @@
 
 #pragma once
 
+#include <array>
 #include <memory>
 #include <optional>
+#include <span>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -73,6 +75,78 @@ public:
         VkFormat format;
     };
 
+    // Dormant preparation for at most four ordered final host writes. No caller
+    // currently enables it. Copies only existing arguments, never creates a view.
+    class TexelBufferObservation {
+    public:
+        static constexpr size_t Capacity = 4;
+
+        struct Result {
+            std::array<PreparedTexelBuffer, Capacity> bindings{};
+            size_t count{};
+        };
+
+        void Reset() noexcept {
+            count = 0;
+            seen = 0;
+            invalid = false;
+        }
+
+        bool Begin(std::span<const size_t> requested) noexcept {
+            Reset();
+            if (requested.empty() || requested.size() > Capacity) {
+                return false;
+            }
+            for (size_t i = 0; i < requested.size(); ++i) {
+                for (size_t j = 0; j < i; ++j) {
+                    if (requested[i] == requested[j]) {
+                        return false;
+                    }
+                }
+                entries[i] = requested[i];
+            }
+            count = requested.size();
+            return true;
+        }
+
+        void Record(size_t entry, const PreparedTexelBuffer& binding) noexcept {
+            for (size_t i = 0; i < count; ++i) {
+                if (entries[i] != entry) {
+                    continue;
+                }
+                const auto bit = 1U << i;
+                invalid |= (seen & bit) != 0;
+                bindings[i] = binding;
+                seen |= bit;
+                return;
+            }
+        }
+
+        [[nodiscard]] std::optional<Result> Take() noexcept {
+            std::optional<Result> result;
+            if (count != 0 && !invalid && seen == (1U << count) - 1) {
+                result = Result{bindings, count};
+            }
+            Reset();
+            return result;
+        }
+
+    private:
+        std::array<size_t, Capacity> entries{};
+        std::array<PreparedTexelBuffer, Capacity> bindings{};
+        size_t count{};
+        unsigned seen{};
+        bool invalid{};
+    };
+
+    bool ObserveTexelBufferTuple(std::span<const size_t> entries) noexcept {
+        return tuple_observation.Begin(entries);
+    }
+
+    [[nodiscard]] std::optional<TexelBufferObservation::Result> TakeTexelBufferTuple() noexcept {
+        return tuple_observation.Take();
+    }
+
     // Observe one existing host texel-buffer write without changing its payload or view.
     void ObserveTexelBufferFormat(size_t entry) noexcept {
         observed_texel_entry = entry;
@@ -130,6 +204,7 @@ public:
         if (observed_texel_entry && *observed_texel_entry == UpdateCount()) {
             observed_texel_format = PreparedTexelBuffer{texel_buffer, offset, size, format};
         }
+        tuple_observation.Record(UpdateCount(), {texel_buffer, offset, size, format});
         if (!use_descriptor_buffer) {
             AddTexelBuffer(texel_buffer);
             return;
@@ -149,6 +224,7 @@ private:
     bool use_descriptor_buffer{false};
     std::optional<size_t> observed_texel_entry;
     std::optional<PreparedTexelBuffer> observed_texel_format;
+    TexelBufferObservation tuple_observation;
     size_t frame_index{0};
     DescriptorUpdateEntry* payload_cursor = nullptr;
     DescriptorUpdateEntry* payload_start = nullptr;
