@@ -182,6 +182,9 @@ target_link_libraries(tests PRIVATE ${PLATFORM_LIBRARIES} Catch2::Catch2WithMain
 if (TARGET dynarmic::dynarmic)
     target_sources(tests PRIVATE core/window_trace.cpp)
     target_link_libraries(tests PRIVATE dynarmic::dynarmic)
+    if (WIN32 AND ARCHITECTURE_x86_64)
+        target_sources(tests PRIVATE common/dynarmic_spin_lock.cpp)
+    endif()
 endif()
 
 add_test(NAME tests COMMAND tests)

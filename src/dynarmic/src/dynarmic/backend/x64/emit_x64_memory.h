@@ -16,6 +16,7 @@
 #include "dynarmic/backend/x64/a64_emit_x64.h"
 #include "dynarmic/backend/x64/exclusive_monitor_friend.h"
 #include "dynarmic/common/spin_lock_x64.h"
+#include "dynarmic/common/exclusive_wait_policy.h"
 #include "dynarmic/interface/exclusive_monitor.h"
 #include "dynarmic/ir/acc_type.h"
 
@@ -390,7 +391,8 @@ void EmitExclusiveLock(BlockOfCode& code, const UserConfig& conf, Xbyak::Reg64 p
     }
 
     code.mov(pointer, std::bit_cast<u64>(GetExclusiveMonitorLockPointer(conf.global_monitor)));
-    EmitSpinLockLock(code, pointer, tmp, code.HasHostFeature(HostFeature::WAITPKG));
+    EmitSpinLockLock(code, pointer, tmp,
+                     UseWaitpkgForExclusiveLock(code.HasHostFeature(HostFeature::WAITPKG)));
 }
 
 template<typename UserConfig>

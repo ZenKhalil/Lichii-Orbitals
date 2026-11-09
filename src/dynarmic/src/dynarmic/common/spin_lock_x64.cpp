@@ -28,6 +28,7 @@ void EmitSpinLockLock(Xbyak::CodeGenerator& code, Xbyak::Reg64 ptr, Xbyak::Reg32
     code.L(loop);
 
     if (waitpkg) {
+        Xbyak::Label restore;
         // TODO: this is because we lack regalloc - so better to be safe :(
         code.push(Xbyak::util::rax);
         code.push(Xbyak::util::rbx);
@@ -42,6 +43,11 @@ void EmitSpinLockLock(Xbyak::CodeGenerator& code, Xbyak::Reg64 ptr, Xbyak::Reg32
         code.db(0x0F); code.db(0xAE);
         code.db(uint8_t((3 << 6) | ((6 & 7) << 3) | (ptr.getIdx() & 7)));
 
+        // The owner may have released before UMONITOR was armed. Retry the
+        // acquisition instead of waiting for a store that already happened.
+        code.cmp(code.dword[ptr], 0);
+        code.je(restore, code.T_NEAR);
+
         // tmp.bit[0] = 0: C0.1 | Slow Wakup | Better Savings
         // tmp.bit[0] = 1: C0.2 | Fast Wakup | Lesser Savings
         // edx:eax is implicitly used as a 64-bit deadline timestamp
@@ -55,12 +61,16 @@ void EmitSpinLockLock(Xbyak::CodeGenerator& code, Xbyak::Reg64 ptr, Xbyak::Reg32
         code.umwait(Xbyak::util::ebx);
         // CF == 1 if we hit the OS-timeout in IA32_UMWAIT_CONTROL without a write
         // CF == 0 if we exited the wait for any other reason
+        code.L(restore);
         code.pop(Xbyak::util::rdx);
         code.pop(Xbyak::util::rbx);
         code.pop(Xbyak::util::rax);
     } else {
         code.pause();
     }
+    // Avoid atomic writes while another thread still holds the lock.
+    code.cmp(code.dword[ptr], 0);
+    code.jne(loop, code.T_NEAR);
     code.L(start);
     code.mov(tmp, 1);
     /*code.lock();*/ code.xchg(code.dword[ptr], tmp);
@@ -71,7 +81,6 @@ void EmitSpinLockLock(Xbyak::CodeGenerator& code, Xbyak::Reg64 ptr, Xbyak::Reg32
 void EmitSpinLockUnlock(Xbyak::CodeGenerator& code, Xbyak::Reg64 ptr, Xbyak::Reg32 tmp) {
     code.xor_(tmp, tmp);
     code.xchg(code.dword[ptr], tmp);
-    code.mfence();
 }
 
 namespace {
