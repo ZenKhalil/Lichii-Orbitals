@@ -24,6 +24,13 @@ records are retained, along with the latest mismatch. Depth values are logged
 as their float bit patterns. `frame` is this observer's guarded `TickFrame`
 count, not a Present ID or the other frame-trace counter.
 
+Despite their historical `_draws` suffix, these counters count viewport-update
+observations. Clears also call this path; a count does not establish that a draw
+rasterized any pixels. Records contain no viewport rectangle, render target or
+draw identity, so a channel or viewport mask cannot identify the left screen
+half. A mismatch supports investigating the viewport dependency defect, not
+attributing the reported unilateral artifact to it.
+
 A bounded atomic try-guard protects diagnostic state only. Contention,
 reentrancy or a different owner permanently disables state observation for
 that renderer and emits `coverage_unknown=true` once. It never waits or adds
