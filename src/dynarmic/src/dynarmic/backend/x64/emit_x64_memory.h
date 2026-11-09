@@ -392,7 +392,8 @@ void EmitExclusiveLock(BlockOfCode& code, const UserConfig& conf, Xbyak::Reg64 p
 
     code.mov(pointer, std::bit_cast<u64>(GetExclusiveMonitorLockPointer(conf.global_monitor)));
     EmitSpinLockLock(code, pointer, tmp,
-                     UseWaitpkgForExclusiveLock(code.HasHostFeature(HostFeature::WAITPKG)));
+                     UseWaitpkgForExclusiveLock(code.HasHostFeature(HostFeature::WAITPKG)),
+                     DoublePauseForExclusiveLock());
 }
 
 template<typename UserConfig>

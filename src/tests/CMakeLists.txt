@@ -196,6 +196,7 @@ if (TARGET dynarmic::dynarmic)
     target_link_libraries(tests PRIVATE dynarmic::dynarmic)
     if (WIN32 AND ARCHITECTURE_x86_64)
         target_sources(tests PRIVATE common/dynarmic_spin_lock.cpp)
+        target_sources(tests PRIVATE common/dynarmic_pause2.cpp)
     endif()
 endif()
 

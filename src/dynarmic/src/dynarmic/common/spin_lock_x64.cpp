@@ -13,6 +13,7 @@
 #include "dynarmic/backend/x64/abi.h"
 #include "dynarmic/backend/x64/hostloc.h"
 #include "dynarmic/common/spin_lock.h"
+#include "dynarmic/common/spin_lock_x64.h"
 
 #ifdef DYNARMIC_ENABLE_NO_EXECUTE_SUPPORT
 static const auto default_cg_mode = Xbyak::DontSetProtectRWE;
@@ -22,7 +23,8 @@ static const auto default_cg_mode = nullptr; //Allow RWE
 
 namespace Dynarmic {
 
-void EmitSpinLockLock(Xbyak::CodeGenerator& code, Xbyak::Reg64 ptr, Xbyak::Reg32 tmp, bool waitpkg) {
+void EmitSpinLockLock(Xbyak::CodeGenerator& code, Xbyak::Reg64 ptr, Xbyak::Reg32 tmp,
+                     bool waitpkg, bool double_pause) {
     Xbyak::Label start, loop;
     code.jmp(start, code.T_NEAR);
     code.L(loop);
@@ -67,6 +69,9 @@ void EmitSpinLockLock(Xbyak::CodeGenerator& code, Xbyak::Reg64 ptr, Xbyak::Reg32
         code.pop(Xbyak::util::rax);
     } else {
         code.pause();
+        if (double_pause) {
+            code.pause();
+        }
     }
     // Avoid atomic writes while another thread still holds the lock.
     code.cmp(code.dword[ptr], 0);

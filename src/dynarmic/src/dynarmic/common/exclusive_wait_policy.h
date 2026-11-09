@@ -14,4 +14,11 @@ inline bool UseWaitpkgForExclusiveLock(bool host_supports_waitpkg) noexcept {
     static const bool disabled = DisableWaitpkgOption(std::getenv("EDEN_NX2_DISABLE_WAITPKG"));
     return host_supports_waitpkg && !disabled;
 }
+// Opt-in experiment: default remains one PAUSE. Only exclusive JIT calls
+// request this; the shared emitter ignores it when WAITPKG is selected.
+inline bool DoublePauseForExclusiveLock() noexcept {
+    static const bool enabled = DisableWaitpkgOption(std::getenv("EDEN_NX2_EXCLUSIVE_PAUSE2"));
+    return enabled;
+}
+
 } // namespace Dynarmic
