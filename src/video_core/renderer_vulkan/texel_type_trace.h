@@ -63,8 +63,9 @@ struct Row {
 struct Budget {
     static constexpr std::uint32_t MismatchLimit = 64;
     static constexpr std::uint32_t ControlLimit = 8;
-    // Two independent budgets per kind: mismatches and matching/unknown controls.
-    std::array<std::atomic<std::uint32_t>, 4> counts{};
+    // Graphics (stages 0-4) and compute (stage 5) each have independent budgets
+    // per kind: mismatches and matching/unknown controls.
+    std::array<std::atomic<std::uint32_t>, 8> counts{};
     std::atomic<std::uint32_t> allocation_failures{}, abandoned_batches{};
 
     bool Available() const noexcept {
@@ -81,7 +82,8 @@ struct Budget {
     }
 
     bool Reserve(Row& row) noexcept {
-        const auto index = 2 * static_cast<std::size_t>(row.kind) + row.mismatch;
+        const auto index = 4 * static_cast<std::size_t>(row.stage == 5) +
+                           2 * static_cast<std::size_t>(row.kind) + row.mismatch;
         const auto limit = Limit(index);
         if (counts[index].load(std::memory_order_relaxed) >= limit) {
             return false;

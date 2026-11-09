@@ -7,8 +7,12 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 This unshipped diagnostic investigates [issue #7](https://github.com/ZenKhalil/Lichii-Orbitals/issues/7).
 It does not change shader translation, descriptor formats, synchronization or draw selection.
-It has not been compiled, tested or used in a game yet. Preparation starts from the exact
-Build 2 documentation commit `9a1f589dfa5762623d1f637550f7c94118e594e0`.
+The original shared-stage version was compiled and tested in candidate source
+`f0fe835fd24068c4901945345293239ecc97a048`: its four focused cases passed with
+tracing off and on. A bounded runtime trace then showed compute records consuming
+the shared uniform quota before later graphics validation findings. This follow-up
+separates the stage-family quotas. Its extended linked tests pass; runtime
+coverage of later graphics findings remains pending.
 
 Set `EDEN_NX2_TEXEL_TYPE_TRACE=1` before starting the process. Only the exact string `1`
 enables the cached process-wide setting. Unset, `0`, `01` and other values leave it off.
@@ -26,8 +30,11 @@ caught. A logged Configure is not proof that a later draw/dispatch actually acce
 
 ## Bounds and coverage
 
-- Separate process-wide budgets allow 64 predicted mismatches and 8 controls for each
-  of uniform and storage texel buffers: at most 144 record attempts altogether.
+- Graphics stages 0-4 share one family; compute stage 5 has a separate family.
+  Each family has independent uniform/storage budgets of 64 predicted mismatches
+  and 8 controls: eight counters and at most 288 record permits altogether.
+  Compute exhaustion cannot consume graphics permits, but graphics stages still
+  share quotas with one another. This is not an independent quota per shader stage.
 - At most 16 rows are retained per Configure. A full batch records `row_cap_hits`.
   It does not scan or save unbounded guest data. There is no deduplication: repeated
   bindings consume the budget. A later error can therefore be outside coverage.
@@ -42,10 +49,15 @@ caught. A logged Configure is not proof that a later draw/dispatch actually acce
 - With the switch off, there is no batch allocation, budget access, formatting or log.
   The added scope/TLS checks and empty shared-pointer lambda capture remain small
   overhead; no zero-overhead or performance equivalence claim has been measured.
-- Enabled allocation is bounded by the 144 permits. It is diagnostic overhead and
+- Enabled allocation is bounded by the 288 permits. It is diagnostic overhead and
   can alter timing; do not use that run as the sole performance baseline.
 
 ## Reading a record
+
+`budget` is a ticket/limit within the row's stage family, kind and mismatch/control
+class, not a process-wide sequence number. The existing `stage`, `kind` and
+`mismatch_prediction` fields identify that scope. A permit does not guarantee a
+logged row or coverage of a later validation finding.
 
 `pipeline` is the actual Vulkan handle; `usable` reports the existing pipeline validity
 check, not successful GPU execution. `set`, `binding`, `element` and `entry` distinguish
@@ -92,11 +104,26 @@ unknown; the flag cannot establish that this descriptor executes an atomic opera
 
 ## Validation gates
 
-Four prepared `[texel_type_trace]` cases exercise the actual header and capture adapter:
+The four `[texel_type_trace]` cases exercise the actual header and capture adapter:
 strict parser/numeric classes/independent quotas, row bounds/nesting/queue identity/seal
 and exception cleanup, concurrent quota grants, and actual Shader::Info declaration vs
-payload indexing plus storage/uniform/computed-handle metadata. They are currently
-unrun. They do not prove compiled production integration or GPU execution.
+payload indexing plus storage/uniform/computed-handle metadata. The extensions exhaust
+both compute kinds/classes before graphics, contend all eight quotas, and reproduce
+compute-uniform exhaustion through Capture/Scope before requiring graphics records
+with independent tickets and confirmed existing host metadata. The five graphics
+stages are also checked to share one family.
+
+Against the unchanged shared-stage header, the extended fixture failed three of
+four cases (8 failures among 651 assertions), including a missing graphics batch after
+compute exhausted its quota. With only the quota implementation corrected, all
+four cases passed with 1123 assertions in each fresh process, both with the option
+unset and set to exact `1`. The concurrent baseline failure count is schedule-dependent;
+the sequential exhaustion and capture checks independently reproduce the defect.
+The combined gate with the separate buffer-upload synchronization change passed
+127 cases and 51,833,695 assertions. The focused filter is `[texel_type_trace]`.
+These native fixture results do not prove GPU execution or coverage of the specific
+later draw. The cached environment parser is unchanged from the candidate's nine
+fresh-process selector checks; those checks were not unnecessarily repeated.
 
 Before a diagnostic package: independently review the full diff; compile its production
 translation units and tests; run focused cases and fresh-process exact-env checks;
