@@ -58,6 +58,13 @@ Known issues still unresolved:
 - [Left-view jitter, glare and static lines (#1)](https://github.com/ZenKhalil/Lichii-Orbitals/issues/1): reported intermittently; cause unconfirmed.
 - [Initial-room performance below 30 FPS (#2)](https://github.com/ZenKhalil/Lichii-Orbitals/issues/2).
 
+A subsequent, separately instrumented run also identified Vulkan transfer,
+texel-buffer type and vertex-state faults. See the [validation findings](docs/nx2/vulkan-validation-findings.md)
+and issues [#6](https://github.com/ZenKhalil/Lichii-Orbitals/issues/6),
+[#7](https://github.com/ZenKhalil/Lichii-Orbitals/issues/7) and
+[#8](https://github.com/ZenKhalil/Lichii-Orbitals/issues/8).
+Their connection to the intermittent visual artifacts is still unconfirmed.
+
 [The viewport dependency defect (#3)](https://github.com/ZenKhalil/Lichii-Orbitals/issues/3)
 is corrected in Build 2. The observer run saw no depth-mode transition, so the
 game checks did not dynamically exercise that repair or establish a connection
