@@ -38,7 +38,8 @@ inline bool IsSingleVertexUniformFetch(const Shader::IR::Program& program) {
         return false;
     }
     const auto& descriptor = info.texture_buffer_descriptors.front();
-    if (descriptor.count != 1 || descriptor.handle_program != ~u32{}) {
+    if (descriptor.count != 1 || descriptor.handle_program != ~u32{} ||
+        descriptor.has_secondary) {
         return false;
     }
     bool fetch{};

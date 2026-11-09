@@ -298,6 +298,9 @@ TEST_CASE("Vertex uniform policy rejects other stage and resource contracts",
     SECTION("Arrays are excluded") {
         program.info.texture_buffer_descriptors[0].count = 2;
     }
+    SECTION("Secondary handles are excluded") {
+        program.info.texture_buffer_descriptors[0].has_secondary = true;
+    }
     SECTION("Computed handles are excluded") {
         program.info.texture_buffer_descriptors[0].handle_program = 0;
     }
