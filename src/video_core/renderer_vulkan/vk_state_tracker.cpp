@@ -86,6 +86,7 @@ void SetupDirtyViewports(Maxwell3D::DirtyState::Tables& tables) {
     FillBlock(tables[0], OFF(viewports), NUM(viewports), Viewports);
     FillBlock(tables[1], OFF(surface_clip), NUM(surface_clip), Viewports);
     tables[0][OFF(viewport_scale_offset_enabled)] = Viewports;
+    tables[0][OFF(depth_mode)] = Viewports;
     tables[1][OFF(window_origin)] = Viewports;
 }
 
@@ -235,7 +236,10 @@ void SetupRasterModes(Maxwell3D::DirtyState::Tables &tables) {
 } // Anonymous namespace
 
 void StateTracker::SetupTables(Tegra::Control::ChannelState& channel_state) {
-    auto& tables{channel_state.payload->maxwell_3d.dirty.tables};
+    SetupTables(channel_state.payload->maxwell_3d.dirty.tables);
+}
+
+void StateTracker::SetupTables(Tegra::Engines::Maxwell3D::DirtyState::Tables& tables) {
     SetupDirtyFlags(tables);
     SetupDirtyViewports(tables);
     SetupDirtyScissors(tables);

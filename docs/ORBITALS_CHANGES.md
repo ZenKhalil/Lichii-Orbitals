@@ -1,5 +1,30 @@
 # Orbitals change notes
 
+## Unreleased viewport dependency correction
+
+The development source now marks Vulkan viewport state dirty when `depth_mode`
+changes. That register affects `minDepth`, so a mode-only update must refresh the
+existing dynamic viewport even when transform and rectangle registers stay the
+same. The correction adds one dependency-table entry; it does not change shader
+translation, guest synchronization or the viewport calculation itself.
+
+Four tests call the complete production table builder and actual state-tracker
+consumption paths. With only the test seam added, the missing depth dependency
+failed while the other three cases passed (342 of 343 assertions passed). Adding
+only the mapping made all four cases and 343 assertions pass. The combined
+regression run passed 115 cases and 51,826,450 assertions. These are source-test
+results, not validation of a future numbered binary.
+
+The optional viewport observer remains off by default. A baseline observation
+through menus, opening cutscene, co-op room, camera rotation and movement logged
+no same-channel depth-mode changes or stale-depth mismatches. That run did not
+exercise this defect and does not connect the correction to the reported
+left-view jitter, glare or static lines. No FPS improvement is claimed.
+
+Build 1 remains the latest recommended numbered baseline until a separately
+identified candidate passes its own runtime checks. The release and its assets
+are unchanged.
+
 ## Build 1
 
 [Build 1](https://github.com/ZenKhalil/Lichii-Orbitals/releases/tag/build-1) was
