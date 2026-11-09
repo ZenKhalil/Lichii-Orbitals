@@ -161,6 +161,7 @@ add_executable(tests
     video_core/uniform_stream_reuse.cpp
     video_core/usage_tracker.cpp
     video_core/shader_invalidation.cpp
+    video_core/texel_type_trace.cpp
     video_core/descriptor_table.cpp
     video_core/descriptor_payload_growth.cpp
     video_core/global_address_tracking.cpp

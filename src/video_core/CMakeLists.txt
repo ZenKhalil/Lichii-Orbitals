@@ -194,6 +194,9 @@ add_library(video_core STATIC
     renderer_vulkan/vk_dlss_network_probe.h
     renderer_vulkan/vk_ocarina_camera_motion.cpp
     renderer_vulkan/vk_ocarina_camera_motion.h
+    renderer_vulkan/texel_type_trace.cpp
+    renderer_vulkan/texel_type_trace.h
+    renderer_vulkan/texel_type_trace_capture.h
     renderer_vulkan/vk_compute_pipeline.cpp
     renderer_vulkan/vk_compute_pipeline.h
     renderer_vulkan/vk_cooperative_hmma_test.cpp
