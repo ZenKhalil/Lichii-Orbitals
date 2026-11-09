@@ -114,12 +114,11 @@ server is on but idle, its thread sleeps in `epoll`/IOCP.
 - **Writes only under the dump directory.** `EDEN_NX2_DEBUG_DIR`, by default
   `<log dir>/debug-server`. Clients never send paths. The server names every file itself:
   `capture-<session>-<n>/`, `screenshot-<session>-<n>.png`.
-- **Nothing the server returns comes from game files, keys or firmware.** It returns rendered
-  pixels, log lines, frame-dump manifests and shader hashes, which the owner already sends today.
-  The memory tools read only the application's guest virtual memory and GPU virtual memory,
-  through their page tables, and never write either. They cannot reach host memory, the key area
-  or the file system: an address resolves only through a page the guest has mapped. The adapter's `capture_image` reads only PNGs inside
-  capture directories that it created in this session, and checks for path escapes.
+- **Captures can contain game code, assets and private data.** Memory tools read mapped guest
+  virtual memory or GPU virtual memory through their page tables; they do not write either.
+  These address-space limits do not make returned bytes safe to publish. Review log excerpts
+  and keep raw memory, shader and frame captures private. The adapter's `capture_image` reads
+  only PNGs inside capture directories created in its session and checks for path escapes.
 - **Logs.** `log_tail` returns lines that already go to `eden_log.txt`.
 - **No authentication.** Any local process may connect, the same as with the GDB stub. That is
   acceptable on the owner's single-user PC with the switch off by default. If it ever runs on a
