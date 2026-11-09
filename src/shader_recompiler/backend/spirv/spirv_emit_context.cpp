@@ -1589,7 +1589,20 @@ void EmitContext::DefineImageBuffers(const Info& info, u32& binding) {
     image_buffers.reserve(info.image_buffer_descriptors.size());
     for (const ImageBufferDescriptor& desc : info.image_buffer_descriptors) {
         const spv::ImageFormat format{GetImageFormat(desc.format)};
-        const Id sampled_type{desc.is_integer ? U32[1] : F32[1]};
+        Id sampled_type{desc.is_integer ? U32[1] : F32[1]};
+        if (runtime_info.single_image_buffer_store_type) {
+            switch (*runtime_info.single_image_buffer_store_type) {
+            case ImageBufferStoreType::Float:
+                sampled_type = F32[1];
+                break;
+            case ImageBufferStoreType::Uint:
+                sampled_type = U32[1];
+                break;
+            case ImageBufferStoreType::Sint:
+                sampled_type = S32[1];
+                break;
+            }
+        }
         const Id image_type{
             TypeImage(sampled_type, spv::Dim::Buffer, false, false, false, 2, format)};
         const Id pointer_type{TypePointer(spv::StorageClass::UniformConstant, image_type)};

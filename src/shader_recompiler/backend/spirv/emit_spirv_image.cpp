@@ -805,7 +805,18 @@ Id EmitImageRead(EmitContext& ctx, IR::Inst* inst, const IR::Value& index, Id co
 void EmitImageWrite(EmitContext& ctx, IR::Inst* inst, const IR::Value& index, Id coords, Id color) {
     const auto info{inst->Flags<IR::TextureInstInfo>()};
     const auto [image, is_integer] = Image(ctx, index, info);
-    if (!is_integer) {
+    if (info.type == TextureType::Buffer && ctx.runtime_info.single_image_buffer_store_type) {
+        switch (*ctx.runtime_info.single_image_buffer_store_type) {
+        case ImageBufferStoreType::Float:
+            color = ctx.OpBitcast(ctx.F32[4], color);
+            break;
+        case ImageBufferStoreType::Sint:
+            color = ctx.OpBitcast(ctx.S32[4], color);
+            break;
+        case ImageBufferStoreType::Uint:
+            break;
+        }
+    } else if (!is_integer) {
         color = ctx.OpBitcast(ctx.F32[4], color);
     }
     ctx.OpImageWrite(image, coords, color);

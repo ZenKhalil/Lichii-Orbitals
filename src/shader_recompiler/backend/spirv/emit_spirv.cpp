@@ -17,6 +17,7 @@
 #include "shader_recompiler/backend/spirv/spirv_emit_context.h"
 #include "shader_recompiler/frontend/ir/basic_block.h"
 #include "shader_recompiler/frontend/ir/program.h"
+#include "shader_recompiler/single_buffer_store.h"
 
 namespace Shader::Backend::SPIRV {
 namespace {
@@ -206,7 +207,9 @@ void Traverse(EmitContext& ctx, IR::Program& program) {
             break;
         case IR::AbstractSyntaxNode::Type::Repeat: {
             Id cond{ctx.Def(node.data.repeat.cond)};
-            if (!Settings::values.disable_shader_loop_safety_checks) {
+            if ((ctx.runtime_info.enable_shader_loop_safety
+                 ? *ctx.runtime_info.enable_shader_loop_safety
+                 : !Settings::values.disable_shader_loop_safety_checks)) {
                 const Id pointer_type{ctx.TypePointer(spv::StorageClass::Private, ctx.U32[1])};
                 const Id safety_counter{ctx.AddGlobalVariable(
                     pointer_type, spv::StorageClass::Private, ctx.Const(0x2000u))};
@@ -656,6 +659,9 @@ void PatchMeshInstructions(std::vector<u32>& code, const EmitContext& ctx) {
 } // Anonymous namespace
 
 std::vector<u32> EmitSPIRV(const Profile& profile, const RuntimeInfo& runtime_info, IR::Program& program, Bindings& bindings) {
+    if (runtime_info.single_image_buffer_store_type && !IsSingleTypelessBufferStore(program)) {
+        throw LogicError("Typed buffer store requires one static write-only typeless buffer");
+    }
     const std::optional<u32> tensor_scratch_word{ReserveCooperativeHmmaScratch(profile, program)};
     EmitContext ctx{profile, runtime_info, program, bindings};
     ctx.tensor_scratch_word = tensor_scratch_word;

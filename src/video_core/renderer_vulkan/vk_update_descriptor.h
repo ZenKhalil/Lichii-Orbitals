@@ -7,6 +7,8 @@
 #pragma once
 
 #include <memory>
+#include <optional>
+#include <utility>
 #include <variant>
 #include <vector>
 #include "video_core/vulkan_common/vulkan_wrapper.h"
@@ -64,6 +66,24 @@ public:
         return upload_start ? static_cast<size_t>(payload_cursor - upload_start) : 0;
     }
 
+    struct PreparedTexelBuffer {
+        VkBufferView view;
+        VkDeviceSize offset;
+        VkDeviceSize size;
+        VkFormat format;
+    };
+
+    // Observe one existing host texel-buffer write without changing its payload or view.
+    void ObserveTexelBufferFormat(size_t entry) noexcept {
+        observed_texel_entry = entry;
+        observed_texel_format.reset();
+    }
+
+    [[nodiscard]] std::optional<PreparedTexelBuffer> TakeTexelBufferBinding() noexcept {
+        observed_texel_entry.reset();
+        return std::exchange(observed_texel_format, std::nullopt);
+    }
+
     void AddSampledImage(VkImageView image_view, VkSampler sampler) {
         *(payload_cursor++) = VkDescriptorImageInfo{
             .sampler = sampler,
@@ -107,6 +127,9 @@ public:
 
     void AddTexelBuffer(VkBufferView texel_buffer, VkDeviceAddress base_address,
                         VkDeviceSize offset, VkDeviceSize size, VkFormat format) {
+        if (observed_texel_entry && *observed_texel_entry == UpdateCount()) {
+            observed_texel_format = PreparedTexelBuffer{texel_buffer, offset, size, format};
+        }
         if (!use_descriptor_buffer) {
             AddTexelBuffer(texel_buffer);
             return;
@@ -124,6 +147,8 @@ private:
     const size_t maximum_frame_payload_size;
     const bool supports_descriptor_buffer;
     bool use_descriptor_buffer{false};
+    std::optional<size_t> observed_texel_entry;
+    std::optional<PreparedTexelBuffer> observed_texel_format;
     size_t frame_index{0};
     DescriptorUpdateEntry* payload_cursor = nullptr;
     DescriptorUpdateEntry* payload_start = nullptr;

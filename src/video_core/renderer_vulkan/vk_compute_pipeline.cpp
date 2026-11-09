@@ -21,6 +21,7 @@
 #include "video_core/renderer_vulkan/pipeline_statistics.h"
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
 #include "video_core/renderer_vulkan/vk_compute_pipeline.h"
+#include "video_core/renderer_vulkan/typed_buffer_store.h"
 #include "video_core/renderer_vulkan/texel_type_trace_capture.h"
 #include "video_core/renderer_vulkan/vk_descriptor_pool.h"
 #include "video_core/renderer_vulkan/vk_frame_dump.h"
@@ -209,11 +210,12 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
                                  Common::ThreadWorker* thread_worker,
                                  PipelineStatistics* pipeline_statistics,
                                  VideoCore::ShaderNotify* shader_notify, const Shader::Info& info_,
-                                 vk::ShaderModule spv_module_, u64 shader_hash_)
+                                 vk::ShaderModule spv_module_, u64 shader_hash_,
+                                 std::optional<Shader::ImageBufferStoreType> store_type_)
     : device{device_},
       pipeline_cache(pipeline_cache_), guest_descriptor_queue{guest_descriptor_queue_},
       descriptor_buffer_ring{descriptor_buffer_ring_}, info{info_},
-      shader_hash{shader_hash_}, spv_module(std::move(spv_module_)) {
+      shader_hash{shader_hash_}, store_type{store_type_}, spv_module(std::move(spv_module_)) {
     if (shader_notify) {
         shader_notify->MarkShaderBuilding();
     }
@@ -360,6 +362,48 @@ void ComputePipeline::RunBuild() {
     build_task = nullptr;
 }
 
+void ComputePipeline::SetStoreFamily(std::array<std::unique_ptr<ComputePipeline>, 3> members,
+                                     std::array<bool, 4> formats) {
+    if (!store_type || !IsBuildTaskDone() || !IsBound()) {
+        throw Shader::LogicError("Incomplete compute family base");
+    }
+    for (size_t i = 0; i < members.size(); ++i) {
+        const auto& member = members[i];
+        if (i == static_cast<size_t>(*store_type)) {
+            if (member) {
+                throw Shader::LogicError("Duplicate compute family base");
+            }
+            continue;
+        }
+        if (!member || !member->IsBuildTaskDone() || !member->IsBound() ||
+            member->info != info || member->store_type != static_cast<Shader::ImageBufferStoreType>(i) ||
+            member->num_descriptor_entries != num_descriptor_entries ||
+            member->uses_descriptor_buffer != uses_descriptor_buffer ||
+            member->uses_push_descriptor != uses_push_descriptor ||
+            member->descriptor_buffer_layout.size != descriptor_buffer_layout.size ||
+            !std::ranges::equal(member->descriptor_buffer_layout.bindings,
+                                descriptor_buffer_layout.bindings, [](const auto& a, const auto& b) {
+                                    return a.type == b.type && a.count == b.count &&
+                                           a.offset == b.offset && a.stride == b.stride;
+                                })) {
+            throw Shader::LogicError("Incompatible compute family member layout");
+        }
+    }
+    store_family = std::move(members);
+    store_formats = formats;
+}
+
+ComputePipeline* ComputePipeline::SelectStorePipeline(VkFormat format) noexcept {
+    if (!store_type) {
+        return this;
+    }
+    const auto selected = TypedBufferStoreType(format, store_formats);
+    if (!selected || *selected == *store_type) {
+        return this;
+    }
+    return store_family[static_cast<size_t>(*selected)].get();
+}
+
 bool ComputePipeline::CanReplaceOcarinaUpscale() const {
     const bool known_shader =
         shader_hash == 0xe40f5efb5480e692ULL || shader_hash == Ocarina1440pShader;
@@ -375,10 +419,19 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
                                 BufferCache& buffer_cache, TextureCache& texture_cache,
                                 TextureCacheRuntime& texture_runtime,
                                 std::optional<ByteAddressedShadow>& shadow,
-                                BindCommand* deferred_bind) {
+                                BindCommand* deferred_bind, ComputePipeline** selected_pipeline) {
     TexelTypeTrace::Scope texel_trace{&guest_descriptor_queue};
+    ComputePipeline* selected = this;
+    if (selected_pipeline) {
+        *selected_pipeline = this;
+    }
     shadow.reset();
     guest_descriptor_queue.Acquire(scheduler, num_descriptor_entries, uses_descriptor_buffer);
+    const size_t store_entry = Shader::NumDescriptors(info.constant_buffer_descriptors) +
+                               Shader::NumDescriptors(info.storage_buffers_descriptors);
+    if (store_type) {
+        guest_descriptor_queue.ObserveTexelBufferFormat(store_entry);
+    }
 
     buffer_cache.SetComputeUniformBufferState(info.constant_buffer_mask, &uniform_buffer_sizes);
     buffer_cache.UnbindComputeStorageBuffers();
@@ -576,7 +629,7 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
                     format = *explicit_format;
                 }
             }
-            if (texel_trace.Active()) {
+            if (texel_trace.Active() && !store_type) {
                 const TexelTypeTrace::Identity identity{
                     .hash = shader_hash,
                     .program_address = kepler_compute.regs.code_loc.Address() + qmd.program_start,
@@ -606,6 +659,43 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
 
     buffer_cache.UpdateComputeBuffers();
     buffer_cache.BindHostComputeBuffers();
+    if (store_type) {
+        const auto prepared = guest_descriptor_queue.TakeTexelBufferBinding();
+        if (!prepared) {
+            throw Shader::LogicError("Typed compute store has no prepared host buffer view");
+        }
+        selected = SelectStorePipeline(prepared->format);
+        if (!selected) {
+            throw Shader::LogicError("Typed compute store has no compatible family member");
+        }
+        const auto numeric = *selected->store_type == Shader::ImageBufferStoreType::Float
+                                 ? TexelTypeTrace::Numeric::Float
+                                 : (*selected->store_type == Shader::ImageBufferStoreType::Sint
+                                        ? TexelTypeTrace::Numeric::Sint
+                                        : TexelTypeTrace::Numeric::Uint);
+        if (texel_trace.Active()) {
+            const auto& view = texture_cache.GetImageView(views.front().id);
+            const TexelTypeTrace::Identity identity{
+                .hash = shader_hash,
+                .program_address = kepler_compute.regs.code_loc.Address() + qmd.program_start,
+                .stage = 5,
+                .native = kepler_compute.IsNativeMode(),
+            };
+            TexelTypeTrace::Offsets offsets;
+            offsets.SkipBuffers(info);
+            TexelTypeTrace::Capture(
+                texel_trace, info, identity, offsets, info.image_buffer_descriptors.front(), 0,
+                views.front().index,
+                Tegra::Texture::TextureHeaderIndex(views.front().index,
+                                                   kepler_compute.regs.tic.limit,
+                                                   gpu_memory.UsesNativeTiling()),
+                view.format, view.format, view.GpuAddr(), view.BufferSize(),
+                static_cast<u32>(view.type), numeric);
+            TexelTypeTrace::Scope::Host(&guest_descriptor_queue, store_entry,
+                                       TexelTypeTrace::Handle(prepared->view), prepared->offset,
+                                       prepared->size, static_cast<u32>(prepared->format));
+        }
+    }
     if (buffer_cache.any_buffer_uploaded) {
         buffer_cache.runtime.PostCopyBarrier();
         buffer_cache.any_buffer_uploaded = false;
@@ -642,12 +732,17 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
         return false;
     }
 
-    if (!is_built.load(std::memory_order::relaxed)) {
-        // Wait for the pipeline to be built
-        scheduler.Record([this](vk::CommandBuffer) {
-            RunBuild();
-            std::unique_lock lock{build_mutex};
-            build_condvar.wait(lock, [this] { return is_built.load(std::memory_order::relaxed); });
+    if (selected_pipeline) {
+        *selected_pipeline = selected;
+    }
+    if (!selected->is_built.load(std::memory_order::relaxed)) {
+        // Keep the selected member immutable across later Configure calls.
+        scheduler.Record([selected](vk::CommandBuffer) {
+            selected->RunBuild();
+            std::unique_lock lock{selected->build_mutex};
+            selected->build_condvar.wait(lock, [selected] {
+                return selected->is_built.load(std::memory_order::relaxed);
+            });
         });
     }
 
@@ -691,7 +786,7 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
     }
 
     const bool is_rescaling = !info.texture_descriptors.empty() || !info.image_descriptors.empty();
-    auto bind = [this, descriptor_data, is_rescaling, descriptor_buffer_offset,
+    auto bind = [this, selected, descriptor_data, is_rescaling, descriptor_buffer_offset,
                       descriptor_buffer_chunk, bind_descriptor_buffer,
                       rescaling_data = rescaling.Data(),
                       texel_trace = TexelTypeTrace::Scope::SealCurrent()](vk::CommandBuffer cmdbuf) {
@@ -701,13 +796,13 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
             cmdbuf.BindDescriptorBuffersEXT(binding_info);
         }
         if (texel_trace) {
-            TexelTypeTrace::Report(texel_trace, TexelTypeTrace::Handle(*pipeline),
-                                  static_cast<bool>(pipeline), uses_descriptor_buffer);
+            TexelTypeTrace::Report(texel_trace, TexelTypeTrace::Handle(*selected->pipeline),
+                                  static_cast<bool>(selected->pipeline), uses_descriptor_buffer);
         }
-        if (!pipeline) {
+        if (!selected->pipeline) {
             return;
         }
-        cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, *pipeline);
+        cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, *selected->pipeline);
         if (!descriptor_set_layout) {
             return;
         }

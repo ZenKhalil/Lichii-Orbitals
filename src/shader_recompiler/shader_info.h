@@ -277,6 +277,8 @@ struct MeshInfo {
 };
 
 struct Info {
+    bool operator==(const Info&) const = default;
+
     static constexpr size_t MAX_INDIRECT_CBUFS{14};
     static constexpr size_t MAX_CBUFS{18};
     /// Native (Switch 2) programs take their storage buffers from raw pointers, as many as they

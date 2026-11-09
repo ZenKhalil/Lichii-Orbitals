@@ -43,6 +43,8 @@ void UpdateDescriptorQueue::TickFrame() {
 /// Reserve one batch, growing drained host storage when possible, otherwise reusing it safely.
 void UpdateDescriptorQueue::Acquire(Scheduler& scheduler, size_t required_entries,
                                     bool use_descriptor_buffer_) {
+    observed_texel_entry.reset();
+    observed_texel_format.reset();
     use_descriptor_buffer = supports_descriptor_buffer && use_descriptor_buffer_;
     static constexpr size_t DEFAULT_REQUIRED_ENTRIES = 0x400;
     const size_t reserve = required_entries > 0 ? required_entries : DEFAULT_REQUIRED_ENTRIES;

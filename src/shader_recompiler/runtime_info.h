@@ -83,7 +83,16 @@ struct TransformFeedbackVarying {
     u32 components{};
 };
 
+enum class ImageBufferStoreType : u8 {
+    Float,
+    Uint,
+    Sint,
+};
+
 struct RuntimeInfo {
+    // Narrow compute family only; callers must validate its complete descriptor/IR contract.
+    std::optional<ImageBufferStoreType> single_image_buffer_store_type;
+    std::optional<bool> enable_shader_loop_safety;
     std::array<AttributeType, 32> generic_input_types{};
     VaryingState previous_stage_stores;
     /// Fragment stage after a mesh program: generic inputs it writes per primitive.

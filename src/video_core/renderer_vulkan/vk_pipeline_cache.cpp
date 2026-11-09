@@ -33,6 +33,7 @@
 #include "shader_recompiler/frontend/maxwell/translate_program.h"
 #include "shader_recompiler/ir_opt/passes.h"
 #include "shader_recompiler/program_header.h"
+#include "shader_recompiler/single_buffer_store.h"
 #include "video_core/engines/kepler_compute.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/memory_manager.h"
@@ -46,6 +47,7 @@
 #include "video_core/renderer_vulkan/pipeline_statistics.h"
 #include "video_core/renderer_vulkan/vertex_repack.h"
 #include "video_core/renderer_vulkan/vk_compute_pipeline.h"
+#include "video_core/renderer_vulkan/typed_buffer_store.h"
 #include "video_core/renderer_vulkan/vk_cooperative_hmma_test.h"
 #include "video_core/renderer_vulkan/vk_descriptor_pool.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
@@ -1003,7 +1005,9 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
             ComputePipelineCacheEntry entry;
             for (auto& env : envs_) {
                 pools.ReleaseContents();
-                entry = CreateComputePipeline(pools, key, env, state.statistics.get(), false);
+                entry = CreateComputePipeline(pools, key, env, state.statistics.get(), false, [&env] {
+                    return VideoCommon::ComputeEnvironmentSnapshot::CaptureDiskCompute(env);
+                });
                 if (entry.pipeline) {
                     break;
                 }
@@ -2000,9 +2004,14 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(const ComputePipe
                            shader->lowered_native};
     env.SetCachedSize(shader->size_bytes);
     env.KeepStoragePointers(keep_pointers);
+    if (env.IsNativeProgram()) {
+        env.BeginComputeInputCapture();
+    }
 
     main_pools.ReleaseContents();
-    auto entry{CreateComputePipeline(main_pools, key, env, nullptr, true)};
+    auto entry{CreateComputePipeline(main_pools, key, env, nullptr, true, [&env] {
+        return VideoCommon::ComputeEnvironmentSnapshot::Capture(env);
+    })};
     if (const char* directory = std::getenv("EDEN_NX2_SHADER_DUMP");
         directory && !entry.pipeline && env.CanBeSerialized()) {
         const auto path = std::filesystem::path{directory} /
@@ -2027,7 +2036,8 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(const ComputePipe
 
 ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
     ShaderPools& pools, const ComputePipelineCacheKey& key, Shader::Environment& env,
-    PipelineStatistics* statistics, bool build_in_parallel) try {
+    PipelineStatistics* statistics, bool build_in_parallel,
+    const std::function<VideoCommon::ComputeEnvironmentSnapshot()>& capture_inputs) try {
     auto hash = key.Hash();
     if (device.HasBrokenCompute()) {
         LOG_ERROR(Render_Vulkan, "Skipping {:#016x}", hash);
@@ -2043,7 +2053,17 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
         env.Dump(hash, key.unique_hash);
     }
 
-    auto program{TranslateProgram(pools.inst, pools.block, env, cfg, host_info)};
+    // Every family translation uses the same options, host capabilities and emission profile.
+    // No options are reread between members. Ineligible callers retain the existing pipeline path.
+    const Shader::Maxwell::TranslationOptions translate_options{
+        .enable_rescaling = Settings::values.resolution_info.active,
+        .verify_ir = Settings::values.renderer_debug.GetValue(),
+    };
+    const Shader::HostTranslateInfo family_host_info{host_info};
+    const Shader::Profile family_profile{profile};
+    const bool loop_safety = !Settings::values.disable_shader_loop_safety_checks;
+    auto program{TranslateProgram(pools.inst, pools.block, env, cfg, family_host_info,
+                                   &translate_options)};
     const VkDriverIdKHR driver_id = device.GetDriverID();
     const bool needs_shared_mem_clamp =
         driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY ||
@@ -2056,6 +2076,81 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
                     program.shared_memory_size / 1024,
                     max_shared_memory / 1024);
         program.shared_memory_size = max_shared_memory;
+    }
+    if (env.IsNativeProgram() && capture_inputs && Shader::IsSingleTypelessBufferStore(program) &&
+        device.ApiVersion() >= VK_API_VERSION_1_3 && device.IsFormatlessImageStoreSupported()) {
+        std::array<bool, TypedBufferStoreFormats.size()> supported{};
+        for (size_t i = 0; i < TypedBufferStoreFormats.size(); ++i) {
+            supported[i] = SupportsTypedBufferStore(
+                device.GetPhysical().GetFormatProperties3(TypedBufferStoreFormats[i]).bufferFeatures);
+        }
+        std::optional<VideoCommon::ComputeEnvironmentSnapshot> snapshot;
+        if (std::ranges::any_of(supported, [](bool value) { return value; })) {
+            try {
+                snapshot.emplace(capture_inputs());
+            } catch (const Shader::Exception& exception) {
+                // The original translation remains valid. An inconsistent capture cannot be replayed.
+                LOG_WARNING(Render_Vulkan, "Compute typed family unavailable shader={:016x}: {}",
+                            key.unique_hash, exception.what());
+            }
+        }
+        if (snapshot) {
+            using Type = Shader::ImageBufferStoreType;
+            constexpr std::array types{Type::Float, Type::Uint, Type::Sint};
+            std::array<vk::ShaderModule, types.size()> modules;
+            std::array<Shader::Info, types.size()> infos;
+            const auto original_info = program.info;
+            for (size_t i = 0; i < types.size(); ++i) {
+                auto replay = snapshot->CreateReplay();
+                ShaderPools member_pools;
+                Shader::Maxwell::Flow::CFG member_cfg{replay, member_pools.flow_block,
+                                                      replay.StartAddress()};
+                auto member = TranslateProgram(member_pools.inst, member_pools.block, replay,
+                                                 member_cfg, family_host_info, &translate_options);
+                if (needs_shared_mem_clamp && member.shared_memory_size > max_shared_memory) {
+                    member.shared_memory_size = max_shared_memory;
+                }
+                if (!Shader::IsSingleTypelessBufferStore(member) || member.info != original_info ||
+                    member.workgroup_size != program.workgroup_size ||
+                    member.local_memory_size != program.local_memory_size ||
+                    member.shared_memory_size != program.shared_memory_size) {
+                    throw Shader::LogicError("Compute input replay changed the translated program");
+                }
+                Shader::RuntimeInfo runtime;
+                runtime.single_image_buffer_store_type = types[i];
+                runtime.enable_shader_loop_safety = loop_safety;
+                Shader::Backend::Bindings bindings;
+                const auto member_code = EmitSPIRV(family_profile, runtime, member, bindings);
+                infos[i] = member.info;
+                if (i != 0 && infos[i] != infos[0]) {
+                    throw Shader::LogicError("Typed compute emission changed pipeline metadata");
+                }
+                device.SaveShader(member_code);
+                modules[i] = BuildShader(device, member_code);
+            }
+
+            // Construct only after all modules exist. No worker captures a partially owned member.
+            // Count each synchronous build with a scope so layout/statistics failures also balance.
+            std::array<std::unique_ptr<ComputePipeline>, types.size()> members;
+            for (size_t i = 0; i < types.size(); ++i) {
+                shader_notify.MarkShaderBuilding();
+                SCOPE_EXIT { shader_notify.MarkShaderComplete(); };
+                members[i] = std::make_unique<ComputePipeline>(
+                    device, scheduler, vulkan_pipeline_cache, descriptor_pool, guest_descriptor_queue,
+                    descriptor_buffer_ring, nullptr, statistics, nullptr, infos[i],
+                    std::move(modules[i]), key.unique_hash, types[i]);
+                if (!members[i]->IsBound() || !members[i]->IsBuildTaskDone()) {
+                    throw Shader::RuntimeError("Typed compute member failed to build");
+                }
+            }
+            const size_t base_index = static_cast<size_t>(
+                original_info.image_buffer_descriptors.front().is_integer ? Type::Uint : Type::Float);
+            auto base = std::move(members[base_index]);
+            base->SetStoreFamily(std::move(members), supported);
+            return {.pipeline = std::move(base),
+                    .null_pointer_slots = env.NullStoragePointerSlots(),
+                    .mapped_pointers = env.MappedStoragePointerKeys()};
+        }
     }
     const std::vector<u32> code{EmitSPIRV(profile, program)};
     device.SaveShader(code);

@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <unordered_map>
 #include <unordered_set>
 #include <memory>
@@ -38,6 +39,7 @@
 #include "video_core/renderer_vulkan/vk_pipeline_cache_prebuild.h"
 #include "video_core/renderer_vulkan/vk_texture_cache.h"
 #include "video_core/shader_cache.h"
+#include "video_core/shader_environment.h"
 
 namespace Core {
 class System;
@@ -167,7 +169,9 @@ private:
                                                      const ComputePipelineCacheKey& key,
                                                      Shader::Environment& env,
                                                      PipelineStatistics* statistics,
-                                                     bool build_in_parallel);
+                                                     bool build_in_parallel,
+                                                     const std::function<VideoCommon::ComputeEnvironmentSnapshot()>&
+                                                         capture_inputs = {});
 
     void SerializeVulkanPipelineCache(const std::filesystem::path& filename,
                                       const vk::PipelineCache& pipeline_cache, u32 cache_version);

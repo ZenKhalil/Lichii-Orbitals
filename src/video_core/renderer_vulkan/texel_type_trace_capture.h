@@ -57,7 +57,8 @@ void Capture(Scope& scope, const Shader::Info& info, const Identity& identity,
              std::uint32_t requested_tic, std::uint32_t resolved_tic,
              VideoCore::Surface::PixelFormat guest_format,
              VideoCore::Surface::PixelFormat selected_format, std::uint64_t guest_address,
-             std::uint32_t guest_size, std::uint32_t view_type) noexcept {
+             std::uint32_t guest_size, std::uint32_t view_type,
+             Numeric compiled_override = Numeric::Unknown) noexcept {
     constexpr bool storage = std::is_same_v<Descriptor, Shader::ImageBufferDescriptor>;
     Row row{};
     row.kind = storage ? Kind::Storage : Kind::Uniform;
@@ -65,7 +66,9 @@ void Capture(Scope& scope, const Shader::Info& info, const Identity& identity,
     row.compiled_format = ~std::uint32_t{};
     row.read = true;
     if constexpr (storage) {
-        row.compiled = desc.is_integer ? Numeric::Uint : Numeric::Float;
+        row.compiled = compiled_override != Numeric::Unknown
+                           ? compiled_override
+                           : (desc.is_integer ? Numeric::Uint : Numeric::Float);
         row.compiled_format = static_cast<std::uint32_t>(desc.format);
         row.read = desc.is_read;
         row.written = desc.is_written;
