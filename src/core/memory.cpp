@@ -961,6 +961,9 @@ struct Memory::Impl {
                 }
             }
             gpu_dirty_managers[core].Collect(address, size);
+            // A download may have snapshotted pending writes before this collection.
+            // Store the CPU's bytes only after any overlapping landing has finished.
+            VideoCore::DownloadLanding::Await(address, size);
         });
     }
 

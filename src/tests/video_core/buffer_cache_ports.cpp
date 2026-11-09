@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <array>
 #include <barrier>
+#include <chrono>
+#include <atomic>
+#include <stdexcept>
 #include <cstring>
 #include <functional>
 #include <memory>
@@ -14,6 +17,7 @@
 #include "common/page_table.h"
 #include "core/core.h"
 #include "core/device_memory.h"
+#include "core/gpu_dirty_memory_manager.h"
 #include "core/hle/kernel/k_process.h"
 #include "core/hle/kernel/kernel.h"
 #include "core/memory.h"
@@ -626,4 +630,132 @@ TEST_CASE("Downloads keep CPU writes collected and not yet applied", "[buffer_po
     REQUIRE(f.bytes[0x20ff7] == 0x34);
     REQUIRE(std::all_of(f.bytes + 0x20ff8, f.bytes + 0x21008, [](u8 b) { return b == 0xee; }));
     REQUIRE(f.bytes[0x21008] == 0x34);
+}
+
+TEST_CASE("Downloads preserve CPU shader-tail writes collected during host completion",
+          "[buffer_ports][download_write_race]") {
+    const bool mapped = GENERATE(false, true);
+    const bool batched = GENERATE(false, true);
+    CAPTURE(mapped, batched);
+    Core::GPUDirtyMemoryManager writes;
+    Fixture f;
+    constexpr DAddr Base = 0x20000;
+    const auto id = Access::Add(*f.cache, Base, 0x10000, mapped);
+    auto& gpu_bytes = Access::Get(*f.cache, id).bytes;
+    std::ranges::fill(gpu_bytes, 0);
+    std::fill(gpu_bytes.begin(), gpu_bytes.begin() + 0x680, 0x12);
+    std::memset(f.bytes + 0x10000, 0x9b, 0x2000);
+    // Model the core's Collect-before-store ordering, using bounded guest stores.
+    for (u32 offset = 0x680; offset < 0xb00; offset += 64) {
+        writes.Collect(Base + offset, 64);
+        std::memset(f.bytes + 0x10000 + offset, 0x5c, 64);
+    }
+    f.cache->SetPendingCpuWrites([&](const std::function<void(DAddr, size_t)>& callback) {
+        writes.ForEachPending(callback);
+    });
+    f.runtime.before_completion = [&] {
+        // These stores complete while the download waits. Its earlier snapshot cannot see them.
+        writes.Collect(Base + 0xb00, 0x500);
+        std::memset(f.bytes + 0x10b00, 0x6d, 0x500);
+    };
+    Access::Dirty(*f.cache, Base, 0x1000);
+    if (batched) {
+        const std::array<std::pair<DAddr, u64>, 1> ranges{{{Base, 0x1000}}};
+        Access::Download(*f.cache, ranges);
+    } else {
+        f.cache->DownloadMemory(Base, 0x1000);
+    }
+    CHECK(f.runtime.finishes == 1);
+    CHECK(std::all_of(f.bytes + 0x10000, f.bytes + 0x10680, [](u8 v) { return v == 0x12; }));
+    CHECK(std::all_of(f.bytes + 0x10680, f.bytes + 0x10b00, [](u8 v) { return v == 0x5c; }));
+    CHECK(std::all_of(f.bytes + 0x10b00, f.bytes + 0x11000, [](u8 v) { return v == 0x6d; }));
+    CHECK(std::all_of(f.bytes + 0x11000, f.bytes + 0x12000, [](u8 v) { return v == 0x9b; }));
+}
+
+TEST_CASE("Download landing orders CPU stores arriving after pending enumeration",
+          "[buffer_ports][download_landing]") {
+    const bool mapped = GENERATE(false, true);
+    const bool batched = GENERATE(false, true);
+    CAPTURE(mapped, batched);
+    Core::GPUDirtyMemoryManager writes;
+    Fixture f;
+    constexpr DAddr Base = 0x20000;
+    const auto id = Access::Add(*f.cache, Base, 0x10000, mapped);
+    auto& buffer = Access::Get(*f.cache, id);
+    std::fill(buffer.bytes.begin(), buffer.bytes.end(), 0x12);
+    std::memset(f.bytes + 0x10000, 0x9b, 0x2000);
+    std::atomic<bool> stored{};
+    std::thread writer;
+    bool coordinated = false;
+    bool launched = false;
+    f.cache->SetPendingCpuWrites([&](const auto& callback) {
+        writes.ForEachPending(callback);
+        if (launched) {
+            return;
+        }
+        launched = true;
+        const auto waits = VideoCore::DownloadLanding::Waits();
+        writer = std::thread([&] {
+            writes.Collect(Base + 0xb00, 0x500);
+            VideoCore::DownloadLanding::Await(Base + 0xb00, 0x500);
+            std::memset(f.bytes + 0x10b00, 0x6d, 0x500);
+            stored.store(true, std::memory_order_release);
+        });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (VideoCore::DownloadLanding::Waits() == waits &&
+               !stored.load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::yield();
+        }
+        coordinated = VideoCore::DownloadLanding::Waits() != waits;
+    });
+    Access::Dirty(*f.cache, Base, 0x1000);
+    if (batched) {
+        const std::array ranges{std::pair<DAddr, u64>{Base, 0x1000}};
+        Access::Download(*f.cache, ranges);
+    } else {
+        f.cache->DownloadMemory(Base, 0x1000);
+    }
+    if (writer.joinable()) {
+        writer.join();
+    }
+    REQUIRE(launched);
+    CHECK(coordinated);
+    CHECK(stored.load(std::memory_order_acquire));
+    CHECK(std::all_of(f.bytes + 0x10000, f.bytes + 0x10b00, [](u8 v) { return v == 0x12; }));
+    CHECK(std::all_of(f.bytes + 0x10b00, f.bytes + 0x11000, [](u8 v) { return v == 0x6d; }));
+    CHECK(std::all_of(f.bytes + 0x11000, f.bytes + 0x12000, [](u8 v) { return v == 0x9b; }));
+}
+
+TEST_CASE("Download landing releases overlapping stores on exception and ignores adjacent stores",
+          "[buffer_ports][download_landing]") {
+    const bool overlap = GENERATE(false, true);
+    CAPTURE(overlap);
+    Core::GPUDirtyMemoryManager writes;
+    std::atomic<bool> stored{};
+    std::thread writer;
+    bool observed = false;
+    try {
+        const VideoCore::DownloadLanding landing{0x20000, 0x21000};
+        const auto waits = VideoCore::DownloadLanding::Waits();
+        writer = std::thread([&] {
+            const DAddr address = overlap ? 0x20fc0 : 0x21000;
+            writes.Collect(address, 64);
+            VideoCore::DownloadLanding::Await(address, 64);
+            stored.store(true, std::memory_order_release);
+        });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (!(overlap ? VideoCore::DownloadLanding::Waits() != waits
+                         : stored.load(std::memory_order_acquire)) &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::yield();
+        }
+        observed = overlap ? (VideoCore::DownloadLanding::Waits() != waits && !stored.load())
+                           : stored.load(std::memory_order_acquire);
+        throw std::runtime_error("exercise landing scope cleanup");
+    } catch (const std::runtime_error&) {
+    }
+    writer.join();
+    CHECK(observed);
+    CHECK(stored.load(std::memory_order_acquire));
 }

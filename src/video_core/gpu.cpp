@@ -4,15 +4,19 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <list>
 #include <memory>
+#include <mutex>
 #include <utility>
+#include <vector>
 
 #include "common/assert.h"
+#include "common/scope_exit.h"
 #include "common/settings.h"
 #include "common/settings_enums.h"
 #include "core/core.h"
@@ -110,17 +114,36 @@ struct GPU::Impl {
     /// Synchronizes CPU writes with Host GPU memory.
     void InvalidateGPUCache() {
         std::vector<std::pair<DAddr, u64>> writes;
-        std::function<void(PAddr, size_t)> callback_writes(
-            [&writes](PAddr address, size_t size) { writes.emplace_back(address, size); });
-        system.GatherGPUDirtyMemory(callback_writes);
-        if (!writes.empty()) {
-            renderer->ReadRasterizer()->OnCacheInvalidations(writes);
+        {
+            // Keep gathered ranges visible until the rasterizer has claimed/applied them.
+            // Never hold this mutex while entering a rasterizer/cache operation.
+            std::scoped_lock lock{applying_writes_mutex};
+            std::function<void(PAddr, size_t)> callback_writes(
+                [&writes](PAddr address, size_t size) { writes.emplace_back(address, size); });
+            system.GatherGPUDirtyMemory(callback_writes);
+            if (writes.empty()) {
+                return;
+            }
+            applying_writes.push_back(&writes);
         }
+        // Upstream registers a pointer to this local vector. Remove it on exceptions too,
+        // before the local storage is destroyed, so later snapshots cannot dereference it.
+        SCOPE_EXIT {
+            std::scoped_lock lock{applying_writes_mutex};
+            std::erase(applying_writes, &writes);
+        };
+        renderer->ReadRasterizer()->OnCacheInvalidations(writes);
     }
 
     void ForEachPendingCpuWrite(const std::function<void(DAddr, size_t)>& callback) {
+        std::scoped_lock lock{applying_writes_mutex};
         for (auto& manager : system.GetGPUDirtyMemoryManager()) {
             manager.ForEachPending(callback);
+        }
+        for (const auto* writes : applying_writes) {
+            for (const auto& [address, size] : *writes) {
+                callback(address, size);
+            }
         }
     }
 
@@ -383,6 +406,10 @@ struct GPU::Impl {
     VideoCommon::PendingMaps pending_maps;
     std::mutex sync_request_mutex;
     std::condition_variable sync_request_cv;
+
+    // Registered local batches from concurrent InvalidateGPUCache calls; removed by scope exit.
+    std::vector<const std::vector<std::pair<DAddr, u64>>*> applying_writes;
+    std::mutex applying_writes_mutex;
 
     const bool is_async;
 
