@@ -75,8 +75,8 @@ public:
         VkFormat format;
     };
 
-    // Dormant preparation for at most four ordered final host writes. No caller
-    // currently enables it. Copies only existing arguments, never creates a view.
+    // Observe at most four ordered final host writes. The opt-in two-uniform
+    // family enables two entries. Copies existing arguments, never creates a view.
     class TexelBufferObservation {
     public:
         static constexpr size_t Capacity = 4;

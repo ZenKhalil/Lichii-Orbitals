@@ -240,6 +240,10 @@ private:
     std::atomic<size_t> last_cache_size{};
     std::atomic_bool flush_in_flight{};
 
+    // Updated only by the opt-in two-uniform path with existing texel tracing active.
+    std::atomic<u64> uniform2_build_attempts{};
+    std::atomic<u64> uniform2_build_completed{};
+    std::atomic<u64> uniform2_build_microseconds{};
     Common::ThreadWorker workers;
     Common::ThreadWorker serialization_thread;
     DynamicFeatures dynamic_features;

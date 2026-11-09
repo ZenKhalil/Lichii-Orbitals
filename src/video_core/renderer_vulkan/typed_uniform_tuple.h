@@ -16,7 +16,7 @@ namespace Vulkan {
 
 inline constexpr std::size_t MaxUniformTupleSize = 4;
 
-// Preparation only: this policy is not used by current pipeline selection.
+// Shared tuple policy. Runtime use is restricted to the opt-in two-declaration experiment.
 // Exact formats determine support; only their numeric classes enter shader keys.
 inline constexpr std::array UniformTupleFormats{
     VK_FORMAT_R32_SFLOAT, VK_FORMAT_R32_UINT, VK_FORMAT_R32_SINT,

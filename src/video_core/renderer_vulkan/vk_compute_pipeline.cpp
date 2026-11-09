@@ -214,14 +214,15 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
                                  vk::ShaderModule spv_module_, u64 shader_hash_,
                                  std::optional<Shader::ImageBufferStoreType> store_type_,
                                  std::optional<Shader::UniformTexelType> uniform_type_,
-                                 UniformFamilyAssessment uniform_assessment_)
+                                 UniformFamilyAssessment uniform_assessment_,
+                                 std::optional<Uniform2Types> uniform2_types_)
     : device{device_},
       pipeline_cache(pipeline_cache_), guest_descriptor_queue{guest_descriptor_queue_},
       descriptor_buffer_ring{descriptor_buffer_ring_}, info{info_},
       shader_hash{shader_hash_}, uniform_assessment{uniform_assessment_},
-      store_type{store_type_}, uniform_type{uniform_type_},
+      store_type{store_type_}, uniform_type{uniform_type_}, uniform2_types{uniform2_types_},
       spv_module(std::move(spv_module_)) {
-    if (store_type && uniform_type) {
+    if ((store_type && uniform_type) || (uniform2_types && (store_type || uniform_type))) {
         throw Shader::LogicError("Compute families must have exactly one specialization kind");
     }
     if (shader_notify) {
@@ -455,6 +456,65 @@ ComputePipeline* ComputePipeline::SelectUniformPipeline(VkFormat format) noexcep
     return uniform_family[static_cast<size_t>(*selected)].get();
 }
 
+void ComputePipeline::SetUniform2Family(
+    std::array<std::unique_ptr<ComputePipeline>, Uniform2MemberCount> members,
+    std::array<bool, UniformTupleFormats.size()> formats) {
+    if (!uniform2_types || *uniform2_types != Uniform2TypesAt(0) || store_type || uniform_type ||
+        !IsBuildTaskDone() || !IsBound() ||
+        std::ranges::any_of(uniform2_family, [](const auto& member) { return bool(member); })) {
+        throw Shader::LogicError("Incomplete two-uniform compute family base");
+    }
+    for (size_t i = 0; i < members.size(); ++i) {
+        const auto& member = members[i];
+        if (i == 0) {
+            if (member) {
+                throw Shader::LogicError("Duplicate two-uniform compute family base");
+            }
+            continue;
+        }
+        if (!member || !member->IsBuildTaskDone() || !member->IsBound() ||
+            member->store_type || member->uniform_type || member->info != info ||
+            member->uniform2_types != Uniform2TypesAt(i) ||
+            member->num_descriptor_entries != num_descriptor_entries ||
+            member->uses_descriptor_buffer != uses_descriptor_buffer ||
+            member->uses_push_descriptor != uses_push_descriptor ||
+            member->descriptor_buffer_layout.size != descriptor_buffer_layout.size ||
+            !std::ranges::equal(member->descriptor_buffer_layout.bindings,
+                                descriptor_buffer_layout.bindings, [](const auto& a, const auto& b) {
+                                    return a.type == b.type && a.count == b.count &&
+                                           a.offset == b.offset && a.stride == b.stride;
+                                })) {
+            throw Shader::LogicError("Incompatible two-uniform compute family member");
+        }
+    }
+    // Publish ownership only after every member has passed. A failed check destroys
+    // the entire local array and cannot leave a partially attached family.
+    uniform2_family = std::move(members);
+    uniform2_formats = formats;
+}
+
+ComputePipeline* ComputePipeline::SelectUniform2Pipeline(
+    const std::array<VkFormat, 2>& formats) noexcept {
+    const auto index = Uniform2FormatIndex(formats, uniform2_formats);
+    if (!index || !uniform2_types) {
+        return nullptr;
+    }
+    return *index == 0 ? this : uniform2_family[*index].get();
+}
+
+ComputePipeline::PreparedUniform2 ComputePipeline::ResolveUniform2Pipeline() {
+    const auto prepared = guest_descriptor_queue.TakeTexelBufferTuple();
+    if (!prepared || prepared->count != 2) {
+        throw Shader::LogicError("Two-uniform compute family has no complete prepared tuple");
+    }
+    const std::array formats{prepared->bindings[0].format, prepared->bindings[1].format};
+    auto* selected = SelectUniform2Pipeline(formats);
+    if (!selected || !selected->IsBound()) {
+        throw Shader::LogicError("Two-uniform compute family has no compatible built member");
+    }
+    return {selected, *prepared};
+}
+
 bool ComputePipeline::CanReplaceOcarinaUpscale() const {
     const bool known_shader =
         shader_hash == 0xe40f5efb5480e692ULL || shader_hash == Ocarina1440pShader;
@@ -483,6 +543,12 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
                                Shader::NumDescriptors(info.storage_buffers_descriptors);
     if (store_type || uniform_type) {
         guest_descriptor_queue.ObserveTexelBufferFormat(store_entry);
+    }
+    if (uniform2_types) {
+        const std::array entries{store_entry, store_entry + 1};
+        if (!guest_descriptor_queue.ObserveTexelBufferTuple(entries)) {
+            throw Shader::LogicError("Cannot observe the two-uniform descriptor tuple");
+        }
     }
 
     buffer_cache.SetComputeUniformBufferState(info.constant_buffer_mask, &uniform_buffer_sizes);
@@ -681,7 +747,7 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
                     format = *explicit_format;
                 }
             }
-            if (texel_trace.Active() && !store_type && !(uniform_type && !is_image)) {
+            if (texel_trace.Active() && !store_type && !((uniform_type || uniform2_types) && !is_image)) {
                 const TexelTypeTrace::Identity identity{
                     .hash = shader_hash,
                     .program_address = kepler_compute.regs.code_loc.Address() + qmd.program_start,
@@ -783,6 +849,43 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
             TexelTypeTrace::Scope::Host(&guest_descriptor_queue, store_entry,
                                        TexelTypeTrace::Handle(prepared->view), prepared->offset,
                                        prepared->size, static_cast<u32>(prepared->format));
+        }
+    }
+    if (uniform2_types) {
+        const auto prepared = ResolveUniform2Pipeline();
+        selected = prepared.pipeline;
+        if (texel_trace.Active()) {
+            const TexelTypeTrace::Identity identity{
+                .hash = shader_hash,
+                .program_address = kepler_compute.regs.code_loc.Address() + qmd.program_start,
+                .stage = 5,
+                .native = kepler_compute.IsNativeMode(),
+            };
+            TexelTypeTrace::Offsets offsets;
+            offsets.SkipBuffers(info);
+            for (size_t entry = 0; entry < 2; ++entry) {
+                const auto& view = texture_cache.GetImageView(views[entry].id);
+                const auto type = (*selected->uniform2_types)[entry];
+                const auto numeric = type == Shader::UniformTexelType::Float
+                                         ? TexelTypeTrace::Numeric::Float
+                                     : type == Shader::UniformTexelType::Sint
+                                         ? TexelTypeTrace::Numeric::Sint
+                                         : TexelTypeTrace::Numeric::Uint;
+                TexelTypeTrace::Capture(
+                    texel_trace, info, identity, offsets, info.texture_buffer_descriptors[entry], 0,
+                    views[entry].index,
+                    Tegra::Texture::TextureHeaderIndex(views[entry].index,
+                                                       kepler_compute.regs.tic.limit,
+                                                       gpu_memory.UsesNativeTiling()),
+                    view.format, view.format, view.GpuAddr(), view.BufferSize(),
+                    static_cast<u32>(view.type), numeric);
+                const auto& binding = prepared.bindings.bindings[entry];
+                TexelTypeTrace::Scope::Host(&guest_descriptor_queue, store_entry + entry,
+                                           TexelTypeTrace::Handle(binding.view), binding.offset,
+                                           binding.size, static_cast<u32>(binding.format));
+                ++offsets.binding;
+                ++offsets.entry;
+            }
         }
     }
     if (buffer_cache.any_buffer_uploaded) {

@@ -755,6 +755,15 @@ bool PreloadAllPipelines() {
 PipelineCache::~PipelineCache() {
     background_pipelines.Stop();
     workers.WaitForRequests();
+    const auto attempts = uniform2_build_attempts.load(std::memory_order_relaxed);
+    if (attempts != 0) {
+        const auto completed = uniform2_build_completed.load(std::memory_order_relaxed);
+        LOG_INFO(Render_Vulkan,
+                 "Two-uniform aggregate: attempts={} completed={} assembled_members={} build_us={}",
+                 attempts, completed, completed * Uniform2MemberCount,
+                 uniform2_build_microseconds.load(std::memory_order_relaxed));
+    }
+
     serialization_thread.WaitForRequests();
     SaveUsedPipelines();
     if (use_vulkan_pipeline_cache && !vulkan_pipeline_cache_filename.empty()) {
@@ -2347,9 +2356,12 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
     // Classify the existing gate once; no additional IR traversal for diagnostics.
     UniformFamilyAssessment uniform_assessment;
     const bool trace_uniform = TexelTypeTrace::Enabled();
+    const bool uniform2 = MultiUniform2Enabled() &&
+                          program.info.texture_buffer_descriptors.size() == 2;
     const auto uniform_reason =
         !env.IsNativeProgram() ? UniformFamilyReason::NotNative
         : !capture_inputs     ? UniformFamilyReason::MissingCapture
+        : uniform2            ? ComputeUniform2Reason(program)
                               : ComputeUniformFetchReason(
                                     program, trace_uniform ? &uniform_assessment.offending_opcode
                                                            : nullptr);
@@ -2364,6 +2376,87 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
         if (program.info.texture_buffer_descriptors.size() == 1) {
             uniform_assessment.target_count = program.info.texture_buffer_descriptors.front().count;
         }
+    }
+    if (uniform2 && uniform_reason == UniformFamilyReason::Eligible) {
+        const auto begin = trace_uniform ? std::chrono::steady_clock::now()
+                                         : std::chrono::steady_clock::time_point{};
+        bool completed{};
+        SCOPE_EXIT {
+            if (trace_uniform) {
+                uniform2_build_attempts.fetch_add(1, std::memory_order_relaxed);
+                uniform2_build_completed.fetch_add(completed ? 1 : 0, std::memory_order_relaxed);
+                uniform2_build_microseconds.fetch_add(
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - begin).count(),
+                    std::memory_order_relaxed);
+            }
+        };
+        std::array<bool, UniformTupleFormats.size()> supported{};
+        for (size_t i = 0; i < UniformTupleFormats.size(); ++i) {
+            const auto features =
+                device.GetPhysical().GetFormatProperties(UniformTupleFormats[i]).bufferFeatures;
+            supported[i] = (features & VK_FORMAT_FEATURE_UNIFORM_TEXEL_BUFFER_BIT) != 0;
+            if (trace_uniform && supported[i]) {
+                uniform_assessment.supported_format_mask |= 1U << i;
+            }
+        }
+        if (!std::ranges::any_of(supported, [](bool value) { return value; })) {
+            throw Shader::RuntimeError("Two-uniform compute family has no supported host formats");
+        }
+        // Capture failure is explicit for this opt-in path; do not silently bind Float.
+        const auto snapshot = capture_inputs();
+        if (trace_uniform) {
+            uniform_assessment.features_queried = true;
+            uniform_assessment.snapshot_available = true;
+            uniform_assessment.family_built = true;
+        }
+        std::array<vk::ShaderModule, Uniform2MemberCount> modules;
+        std::array<Shader::Info, Uniform2MemberCount> infos;
+        const auto original_info = program.info;
+        for (size_t i = 0; i < Uniform2MemberCount; ++i) {
+            auto replay = snapshot.CreateReplay();
+            ShaderPools member_pools;
+            Shader::Maxwell::Flow::CFG member_cfg{replay, member_pools.flow_block,
+                                                  replay.StartAddress()};
+            auto member = TranslateProgram(member_pools.inst, member_pools.block, replay,
+                                           member_cfg, family_host_info, &translate_options);
+            if (needs_shared_mem_clamp && member.shared_memory_size > max_shared_memory) {
+                member.shared_memory_size = max_shared_memory;
+            }
+            if (ComputeUniform2Reason(member) != UniformFamilyReason::Eligible ||
+                member.info != original_info || member.workgroup_size != program.workgroup_size ||
+                member.local_memory_size != program.local_memory_size ||
+                member.shared_memory_size != program.shared_memory_size) {
+                throw Shader::LogicError("Two-uniform replay changed program metadata");
+            }
+            const auto types = Uniform2TypesAt(i);
+            Shader::RuntimeInfo runtime;
+            runtime.uniform_texel_types = {types[0], types[1]};
+            runtime.enable_bloom_workaround = bloom_workaround;
+            runtime.enable_shader_loop_safety = loop_safety;
+            Shader::Backend::Bindings bindings;
+            const auto code = EmitSPIRV(family_profile, runtime, member, bindings);
+            infos[i] = member.info;
+            if (i != 0 && infos[i] != infos[0]) {
+                throw Shader::LogicError("Two-uniform emission changed pipeline metadata");
+            }
+            device.SaveShader(code);
+            modules[i] = BuildShader(device, code);
+        }
+        // Every module precedes every synchronous object. No worker captures a partial child.
+        auto base = BuildUniform2Members<ComputePipeline>([&](size_t i) {
+            shader_notify.MarkShaderBuilding();
+            SCOPE_EXIT { shader_notify.MarkShaderComplete(); };
+            return std::make_unique<ComputePipeline>(
+                device, scheduler, vulkan_pipeline_cache, descriptor_pool, guest_descriptor_queue,
+                descriptor_buffer_ring, nullptr, statistics, nullptr, infos[i],
+                std::move(modules[i]), key.unique_hash, std::nullopt, std::nullopt,
+                uniform_assessment, Uniform2TypesAt(i));
+        }, supported);
+        completed = true;
+        return {.pipeline = std::move(base),
+                .null_pointer_slots = env.NullStoragePointerSlots(),
+                .mapped_pointers = env.MappedStoragePointerKeys()};
     }
     if (uniform_reason == UniformFamilyReason::Eligible) {
         std::array<bool, ComputeUniformFormats.size()> supported{};

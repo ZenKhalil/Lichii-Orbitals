@@ -19,6 +19,7 @@
 #include "shader_recompiler/frontend/ir/ir_emitter.h"
 #include "shader_recompiler/host_translate_info.h"
 #include "shader_recompiler/ir_opt/passes.h"
+#include "video_core/renderer_vulkan/compute_uniform2.h"
 #include "video_core/renderer_vulkan/typed_uniform_tuple.h"
 #include "video_core/renderer_vulkan/vk_update_descriptor.h"
 #include "video_core/shader_environment.h"
@@ -512,4 +513,104 @@ TEST_CASE("Final texel tuple observations retain order and reject partial writes
     CHECK_FALSE(observer.Begin(std::array<size_t, 2>{1, 1}));
     CHECK_FALSE(observer.Begin(std::array<size_t, 5>{1, 2, 3, 4, 5}));
     CHECK_FALSE(observer.Begin({}));
+}
+
+
+TEST_CASE("Two-uniform activation keeps exact count and independent format classes",
+          "[compute_uniform2]") {
+    using Reason = Vulkan::UniformFamilyReason;
+    const std::array<const char*, 8> disabled_values{nullptr, "", "0", "true", "01", "1 ", " 1", "2"};
+    for (const char* disabled : disabled_values) {
+        CHECK_FALSE(Vulkan::ParseMultiUniform2(disabled));
+    }
+    CHECK(Vulkan::ParseMultiUniform2("1"));
+    TupleInput input;
+    for (u32 count = 1; count <= 4; ++count) {
+        TupleProgram original{input, count};
+        CHECK((Vulkan::ComputeUniform2Reason(original.program) == Reason::Eligible) == (count == 2));
+        CHECK(Vulkan::IsSingleComputeUniformFetch(original.program) == (count == 1));
+    }
+    for (u32 entry = 0; entry < 2; ++entry) {
+        TupleProgram invalid{input, 2};
+        invalid.program.info.texture_buffer_descriptors[entry].has_secondary = true;
+        CHECK(Vulkan::ComputeUniform2Reason(invalid.program) == Reason::SecondaryHandle);
+    }
+    TupleProgram joint{input, 2};
+    joint.program.info.image_buffer_descriptors.emplace_back();
+    CHECK(Vulkan::ComputeUniform2Reason(joint.program) == Reason::StorageImageDeclarations);
+    std::array<bool, Vulkan::UniformTupleFormats.size()> supported;
+    supported.fill(true);
+    for (size_t first = 0; first < supported.size(); ++first) {
+        for (size_t second = 0; second < supported.size(); ++second) {
+            const std::array formats{Vulkan::UniformTupleFormats[first],
+                                     Vulkan::UniformTupleFormats[second]};
+            const auto index = Vulkan::Uniform2FormatIndex(formats, supported);
+            REQUIRE(index);
+            const Vulkan::Uniform2Types expected{
+                Vulkan::UniformTupleTypes[first], Vulkan::UniformTupleTypes[second]};
+            CHECK(Vulkan::Uniform2TypesAt(*index) == expected);
+            auto unavailable = supported;
+            unavailable[second] = false;
+            CHECK_FALSE(Vulkan::Uniform2FormatIndex(formats, unavailable));
+        }
+    }
+    CHECK_FALSE(Vulkan::Uniform2FormatIndex(
+        {VK_FORMAT_R8_UINT, VK_FORMAT_R32_UINT}, supported));
+    CHECK_FALSE(Vulkan::Uniform2FormatIndex(
+        {VK_FORMAT_R32_UINT, VK_FORMAT_UNDEFINED}, supported));
+    CHECK_FALSE(Vulkan::Uniform2Index(
+        {static_cast<UniformTexelType>(3), UniformTexelType::Float}));
+    std::set<size_t> indices;
+    for (size_t i = 0; i < Vulkan::Uniform2MemberCount; ++i) {
+        const auto index = Vulkan::Uniform2Index(Vulkan::Uniform2TypesAt(i));
+        REQUIRE(index);
+        CHECK(*index == i);
+        CHECK(indices.insert(*index).second);
+    }
+}
+
+TEST_CASE("All nine eager uniform members preserve owned replay and unrelated atomic output",
+          "[compute_uniform2]") {
+    TemporaryRecord record;
+    auto captured = [&] {
+        TupleInput input;
+        input.BeginComputeInputCapture();
+        TupleProgram program{input, 2};
+        REQUIRE(Vulkan::ComputeUniform2Reason(program.program) ==
+                Vulkan::UniformFamilyReason::Eligible);
+        const auto info = program.program.info;
+        auto snapshot = VideoCommon::ComputeEnvironmentSnapshot::Capture(input);
+        std::ofstream output{record.path, std::ios::binary};
+        REQUIRE(output.good());
+        input.Serialize(output);
+        REQUIRE(output.good());
+        return std::pair{std::move(snapshot), info};
+    }();
+    auto warm = [&] {
+        VideoCommon::FileEnvironment input;
+        std::ifstream stream{record.path, std::ios::binary};
+        input.Deserialize(stream);
+        REQUIRE(stream.good());
+        return VideoCommon::ComputeEnvironmentSnapshot::CaptureDiskCompute(input);
+    }();
+    std::optional<Shader::Info> emitted_info;
+    for (size_t i = 0; i < Vulkan::Uniform2MemberCount; ++i) {
+        const auto types = Vulkan::Uniform2TypesAt(i);
+        auto cold_environment = captured.first.CreateReplay();
+        auto warm_environment = warm.CreateReplay();
+        TupleProgram cold{cold_environment, 2};
+        TupleProgram disk{warm_environment, 2};
+        REQUIRE(cold.program.info == captured.second);
+        REQUIRE(disk.program.info == captured.second);
+        REQUIRE(Vulkan::ComputeUniform2Reason(cold.program) ==
+                Vulkan::UniformFamilyReason::Eligible);
+        const auto code = cold.Emit(types);
+        CHECK(code == disk.Emit(types));
+        CheckTuple(code, types); // Exact per-component SSBO offset and image atomic chain.
+        if (!emitted_info) {
+            emitted_info = cold.program.info;
+        }
+        CHECK(cold.program.info == *emitted_info);
+        CHECK(disk.program.info == *emitted_info);
+    }
 }

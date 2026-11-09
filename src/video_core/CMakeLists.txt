@@ -202,6 +202,7 @@ add_library(video_core STATIC
     renderer_vulkan/vk_compute_pipeline.h
     renderer_vulkan/typed_uniform_compute.h
     renderer_vulkan/typed_uniform_tuple.h
+    renderer_vulkan/compute_uniform2.h
     renderer_vulkan/uniform_family_assessment.h
     renderer_vulkan/vk_cooperative_hmma_test.cpp
     renderer_vulkan/vk_cooperative_hmma_test.h

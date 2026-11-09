@@ -1,5 +1,10 @@
 # Dormant compute uniform tuple preparation
 
+This document records the Candidate 6 dormant preparation and its tests.
+The later default-off exact-two experiment is described separately in
+[TWO_UNIFORM_EXPERIMENT.md](TWO_UNIFORM_EXPERIMENT.md); three/four-declaration
+and graphics activation remain absent.
+
 This preparation is based on Candidate 5 source
 `59f6372b5958e52ffce224567baac6777c07a759`. It does not activate multi-declaration
 pipeline compilation, caching or selection. Existing single-declaration uniform
