@@ -66,5 +66,8 @@ serialization guard and all other source/configuration in both arms, verify the
 actual JIT wait-loop selection, and report frame-time tails as well as averages.
 Short lock-test timings are correctness diagnostics, not performance evidence.
 
-No final GUI/CLI candidate package or gameplay validation has been performed for
-this branch. Existing Candidate 5 source and immutable package remain preserved.
+At the test-stage revision recorded here, no final GUI/CLI package or gameplay
+run had yet been completed. The later Candidate 6 package and off/on/off results
+are recorded separately in [same-binary results](CANDIDATE6_SAME_BINARY_RESULTS.md).
+This document retains the original test-stage counts and dormant policy scope;
+Candidate 5's immutable package remains preserved.

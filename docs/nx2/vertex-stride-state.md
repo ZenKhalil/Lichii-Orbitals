@@ -21,11 +21,9 @@ extended-dynamic-state policy, including the user's setting. Full dynamic vertex
 input has its own setting. Validation must cover their combinations; it must not
 substitute a device-support check for the actual enabled policy.
 
-This change is not yet compiled or runtime-validated. The existing linked
-regressions and a fresh application run with core validation are required.
-The latter must exercise both indexed and non-indexed draws and record zero
-stride-state errors in a fresh capture with no truncation. Normal visual/audio
-checks follow; reaching a duplicate-message limit never counts as a clean run.
-A test that only repeats the declaration conditional would not validate command
-compatibility, so no such test is added. No FPS gain or fix for the reported
-left-view artifacts is claimed. Build 2 remains the published recommendation.
+The production change compiled in the integrated candidates. Candidate 2's fresh
+Core/Synchronization run reached gameplay and movement with zero indexed and
+non-indexed stride-state reports. See the
+[runtime record](vulkan-validation-findings.md#build-3-candidate-2). This does not
+exhaust every device/settings combination. No mirrored conditional-only test
+was added, and no FPS gain or split-screen artifact fix is claimed.

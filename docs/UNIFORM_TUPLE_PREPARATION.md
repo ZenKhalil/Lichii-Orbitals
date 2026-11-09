@@ -10,7 +10,8 @@ This preparation is based on Candidate 5 source
 pipeline compilation, caching or selection. Existing single-declaration uniform
 and store families, their supported formats and renderer behavior remain the
 active paths. Native preparation checks are recorded in
-[C6 correctness results](CANDIDATE6_CORRECTNESS.md); gameplay remains untested.
+[C6 correctness results](CANDIDATE6_CORRECTNESS.md). Its later gameplay comparison
+did not activate these dormant helpers.
 
 The new helper accepts one to four static count-one uniform-texel declarations
 only after checking each descriptor and every normalized buffer-fetch index.
@@ -53,15 +54,15 @@ Four application cases are added under `[compute_uniform_tuple]`:
   unsupported formats and inactive-policy isolation.
 - The actual queue observation component preserves exact byte ranges and order
   and rejects duplicate/incomplete/reset observations. A separate WORK-only
-  exact-method projection is prepared for both descriptor payload modes; it is
-  not a fabricated Device/Scheduler or a lifecycle test.
+  exact-method projection passed 50 checks across both descriptor payload modes;
+  it is not a Device/Scheduler or a lifecycle test.
 
 Application compilation, the four linked cases and the exact-method projection
 passed in the authorized no-game window. The separate six-case synthetic GPU
 gate also passed R8 normalization/default components and ordered mixed fetches.
 No prior Candidate 5 result is relabelled as validation of these new cases.
 
-## Activation remains blocked on lifecycle design
+## Limits of the dormant Candidate 6 preparation
 
 Current DispatchCompute holds texture and buffer cache mutexes across Configure.
 The final type tuple is available only after existing host binding. Any future
@@ -72,6 +73,7 @@ The existing timeline/build-completion retirement protocol must be extended and
 tested before eviction or bounded admission can be considered safe. A cache cap
 cannot justify dispatching a type-incompatible fallback or skipping work.
 
-This step supplies neither that lifecycle nor joint uniform/store or graphics
-four-declaration activation. It does not claim to fix any reported shader,
-flicker, loading delay or frame rate.
+The later exact-two experiment uses eager construction rather than this proposed
+on-demand design; see [its separate scope](TWO_UNIFORM_EXPERIMENT.md). Candidate 6
+itself supplied neither runtime lifecycle nor joint uniform/store or graphics
+four-declaration activation, and its tests did not establish a gameplay fix.

@@ -55,15 +55,35 @@ the normal player archive.
 
 ## Validation and numbering
 
-The current development source's combined Catch2 filter is:
+The current selected regression filter contains 174 cases; the separate
+shader/compiler/cache filter contains 96. Run them separately:
 
 ```powershell
-./build/bin/tests.exe '[buffer_ports],[gpu_dirty_memory],[sysmix],[sysmix_sink],[microphone],[shader_invalidation],[report_fence],[timing_pause],[dynarmic_spin_lock],[native_macro],[macro],[maxwell_fast_method],[gpu_split_dependencies],[nx2_debug_server],[split_fence_wait],[viewport_dirty_state]'
+$selectedTests = @(
+    '[buffer_ports]', '[gpu_dirty_memory]', '[sysmix]',
+    '[sysmix_sink]', '[microphone]', '[shader_invalidation]',
+    '[report_fence]', '[timing_pause]', '[dynarmic_spin_lock]',
+    '[native_macro]', '[macro]', '[maxwell_fast_method]',
+    '[gpu_split_dependencies]', '[nx2_debug_server]', '[split_fence_wait]',
+    '[viewport_dirty_state]', '[present_transfer_sync]', '[texture_transfer_sync]',
+    '[texel_type_trace]', '[buffer_upload_sync]', '[compute_input_replay]',
+    '[typed_buffer_store]', '[uniform_texel_emitter]', '[graphics_input_capture]',
+    '[graphics_uniform_replay]', '[compute_uniform_family]', '[mixed_buffer_store]',
+    '[dynarmic_pause2]', '[compute_uniform_tuple]', '[compute_uniform2]'
+) -join ','
+./build/bin/tests.exe $selectedTests
+./build/bin/tests.exe '[shader],[pipeline_cache_files],[spirv],[fast_fusion_byte_store]'
 ```
 
-The four `[viewport_dirty_state]` cases supplement the 111-case Build 1 filter.
-They call the complete production dependency builder; they do not submit Vulkan
-commands or establish the cause of a visual artifact.
+Run with experimental and diagnostic environment flags unset unless a focused
+test explicitly selects one. Candidate 7 source `028ea242` passed both filters;
+numbered releases must record results from their own final executable. Assertion
+totals can vary in contention tests. These are native regression selections,
+not a claim of complete gameplay or GPU-driver coverage.
+
+The four inherited `[viewport_dirty_state]` cases call the production dependency
+builder and state-tracker consumption paths. They supplement the original
+111-case Build 1 selection and do not establish a visual-artifact cause.
 
 For a numbered release, set its exact `LICHII_BUILD_TAG`, such as `build-1`, and
 record the actual source commit, generated revision metadata, compiler and

@@ -58,6 +58,9 @@ trace quota change, passed 127 cases and 51,833,695 assertions. Run the focused 
 were built with the existing Release/ThinLTO configuration; these are dispatch
 recorder tests, not a Vulkan device integration test.
 
-These checks do not submit GPU work or validate resource contents and lifetime.
-A fresh validation-layer run is required before associating a source correction
-with the reported host hazard.
+These recorder checks do not submit GPU work. The later Candidate 2 application
+run reached co-op gameplay and movement with zero captured synchronization
+hazards; those categories did not reach their message cap. The
+[runtime record](vulkan-validation-findings.md#build-3-candidate-2) retains the
+coverage limits. The original live buffer was not independently attributed to
+this route, and no pixel or FPS improvement is claimed.

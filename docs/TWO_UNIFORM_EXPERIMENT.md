@@ -61,7 +61,7 @@ Measure cold/warm cache conditions, eligible-family counts, startup and first-us
 stalls separately. Trace runs establish selection and validation evidence;
 clean frame-time measurements should keep heavy diagnostics off.
 
-## Prepared validation and remaining gates
+## Native results and remaining runtime gates
 
 Two added application cases cover the exact gate and ordered class indices,
 all supported format pairs, negative controls, and all nine owned cold/warm
@@ -91,14 +91,23 @@ checks that the cached choice remains stable. Use fresh processes for absent,
 empty, padded, alternative and exact-one values. The preparation script itself
 does not configure, compile or launch anything.
 
-No new native, driver or gameplay test has run for this source draft. Before
-promotion, run the linked cases and fresh-process cached selector controls,
-the exact-method projection, and the combined regression suite. Then use the
-actual candidate with Core/Synchronization Validation and final-view diagnostics
-to establish that the intended two-declaration programs select compatible
-members. Check shutdown, cache replacement and both dispatch forms with the
-stated limits. Failure cleanup is not a promise of graceful application shutdown
-for every allocation or driver failure.
+Candidate 7 source `028ea2427dc3af0dc76bccc32bbf0f3c21609482` passed
+both new cases with 500,685 assertions. Its packaged test executable passed
+174 selected cases / 53,298,864 assertions and 96 compiler/cache cases /
+448,273 assertions. The exact-method projection passed 578 checks; nine fresh
+processes passed 18 cached-selector checks. Contention totals can vary.
+
+The six-case GPU value result remains inherited Candidate 6 evidence: emitter
+and environment inputs are unchanged, and the tuple policy differs only by a
+comment. It is not a new driver test of this experiment's factory or Configure.
+
+Actual candidate validation and final-view metadata must establish activation
+before any default-policy change. A two-uniform shader with storage texel
+bindings is an intentional negative control, expected to report
+`StorageImageDeclarations`; two uniform declarations alone do not qualify it.
+Shutdown, cache replacement and real queued lifetime remain separately scoped
+runtime checks. The experiment stays off by default. Failure cleanup does not
+promise graceful application shutdown for every allocation or driver failure.
 
 The upstream reference checked for the original uniform declaration behavior is
 `zortos293/Lichii` commit `cbb512ee7a9de9d9dbe2f865ec2e468888503214`.

@@ -86,8 +86,9 @@ whitespace cleanup. The combined run extends the filter in
 ./build/bin/tests.exe '[texture_transfer_sync]'
 ```
 
-The existing numbered Build 2 package was preserved; GUI and CLI executables have
-not been rebuilt for this correction. A fresh validation-layer run must check
-the reported hazards before drawing a runtime conclusion. These dispatch tests
-do not establish image contents, lifetime across submissions, a visual-artifact
-fix or an FPS gain.
+These initial recorder tests preceded the candidate GUI/CLI builds; the numbered
+Build 2 package was preserved. The later Candidate 2 application run reached
+co-op gameplay and movement with no captured synchronization errors and no
+hazard-category saturation. See the [runtime record](vulkan-validation-findings.md#build-3-candidate-2).
+The dispatch tests themselves do not establish image contents or lifetime across
+submissions; no visual-artifact fix or FPS gain is attributed to this correction.

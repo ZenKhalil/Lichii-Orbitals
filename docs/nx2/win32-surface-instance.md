@@ -19,10 +19,10 @@ Primary references:
 - The [pinned upstream implementation](https://github.com/zortos293/Lichii/blob/cbb512ee7a9de9d9dbe2f865ec2e468888503214/src/video_core/vulkan_common/vulkan_surface.cpp)
   still supplies null. This is a local correction, not an upstream patch port.
 
-The actual production translation unit compiled successfully with the existing
-Windows clang-cl Release/ThinLTO flags and isolated output. A fresh application
-VVL startup is still required to verify the runtime result. There is no mirrored
-logic test for this API wiring change. Removing this startup violation
+The production translation unit compiled with the existing Windows clang-cl
+Release/ThinLTO flags. The later Candidate 3 application run reported no Win32
+instance violation; see its [runtime record](vulkan-validation-findings.md#build-3-candidate-3).
+There is no mirrored logic test for this API wiring change. Removing this startup violation
 does not establish a fix for the reported split-screen artifact, numeric texel
 mismatches or a separate private-data feature report. No private-data feature is
 enabled by this change.

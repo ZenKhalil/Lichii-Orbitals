@@ -57,11 +57,11 @@ case demonstrated the absent post-clear barrier. After applying only the helper
 correction, all three cases passed with 210 assertions. The combined run with
 the existing regression filter passed 118 cases and 51,828,430 assertions.
 
-These are linked command-construction tests, not driver execution. A separately
-identified candidate still needs a supervised synchronization-validation
-rerun of the presentation paths and normal visual/audio smoke checks before
-release. An absent message after the validation duplicate cap is not a clean
-result; capture a fresh run and inspect coverage.
+These are linked command-construction tests. The later Candidate 2 application
+run reached co-op gameplay and movement with Core/Synchronization Validation
+and no captured synchronization errors; neither hazard category reached its
+message cap. See the [runtime record](vulkan-validation-findings.md#build-3-candidate-2)
+for normal-run results and remaining faults.
 
 No connection to the intermittent left-view jitter, glare or static lines is
 established, and no FPS improvement is claimed. Build 2 remains the published
