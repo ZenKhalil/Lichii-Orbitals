@@ -298,6 +298,9 @@ public:
 
     void SetupTables(Tegra::Control::ChannelState& channel_state);
 
+    /// Builds register dependencies without requiring a GPU channel.
+    static void SetupTables(Tegra::Engines::Maxwell3D::DirtyState::Tables& tables);
+
     void ChangeChannel(Tegra::Control::ChannelState& channel_state);
 
     void InvalidateState();

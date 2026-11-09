@@ -55,11 +55,15 @@ the normal player archive.
 
 ## Validation and numbering
 
-The accepted candidate's combined Catch2 filter is:
+The current development source's combined Catch2 filter is:
 
 ```powershell
-./build/bin/tests.exe '[buffer_ports],[gpu_dirty_memory],[sysmix],[sysmix_sink],[microphone],[shader_invalidation],[report_fence],[timing_pause],[dynarmic_spin_lock],[native_macro],[macro],[maxwell_fast_method],[gpu_split_dependencies],[nx2_debug_server],[split_fence_wait]'
+./build/bin/tests.exe '[buffer_ports],[gpu_dirty_memory],[sysmix],[sysmix_sink],[microphone],[shader_invalidation],[report_fence],[timing_pause],[dynarmic_spin_lock],[native_macro],[macro],[maxwell_fast_method],[gpu_split_dependencies],[nx2_debug_server],[split_fence_wait],[viewport_dirty_state]'
 ```
+
+The four `[viewport_dirty_state]` cases supplement the 111-case Build 1 filter.
+They call the complete production dependency builder; they do not submit Vulkan
+commands or establish the cause of a visual artifact.
 
 For a numbered release, set its exact `LICHII_BUILD_TAG`, such as `build-1`, and
 record the actual source commit, generated revision metadata, compiler and

@@ -6,6 +6,13 @@ the dirty table or change emitted Vulkan commands. Its connection to the
 reported left-view artifacts remains unconfirmed. Build 1 does not include
 this observer and remains the recommended numbered baseline.
 
+The development source separately corrects the missing `depth_mode` dirty-table
+dependency. The observer itself still makes no correction and remains useful for
+checking update behavior. The initial observer-only gameplay run recorded no
+same-channel mode changes or stale-depth mismatches, so it did not exercise this
+defect or establish a connection to the reported artifacts. See the
+[change notes](../ORBITALS_CHANGES.md) for the production regression evidence.
+
 Set `EDEN_NX2_VIEWPORT_DEPENDENCY_TRACE=1` before starting the diagnostic build.
 Only that exact value enables it; unset and other values keep it off. Restart
 after changing the variable. Keep other heavy diagnostics disabled when
