@@ -184,6 +184,7 @@ add_library(video_core STATIC
     renderer_vulkan/vk_buffer_cache_base.cpp
     renderer_vulkan/vk_buffer_cache.cpp
     renderer_vulkan/vk_buffer_cache.h
+    renderer_vulkan/vk_buffer_transfer.h
     renderer_vulkan/vk_command_pool.cpp
     renderer_vulkan/vk_command_pool.h
     renderer_vulkan/vk_compute_pass.cpp
@@ -194,8 +195,15 @@ add_library(video_core STATIC
     renderer_vulkan/vk_dlss_network_probe.h
     renderer_vulkan/vk_ocarina_camera_motion.cpp
     renderer_vulkan/vk_ocarina_camera_motion.h
+    renderer_vulkan/texel_type_trace.cpp
+    renderer_vulkan/texel_type_trace.h
+    renderer_vulkan/texel_type_trace_capture.h
     renderer_vulkan/vk_compute_pipeline.cpp
     renderer_vulkan/vk_compute_pipeline.h
+    renderer_vulkan/typed_uniform_compute.h
+    renderer_vulkan/typed_uniform_tuple.h
+    renderer_vulkan/compute_uniform2.h
+    renderer_vulkan/uniform_family_assessment.h
     renderer_vulkan/vk_cooperative_hmma_test.cpp
     renderer_vulkan/vk_cooperative_hmma_test.h
     renderer_vulkan/vk_descriptor_buffer.cpp
@@ -208,6 +216,7 @@ add_library(video_core STATIC
     renderer_vulkan/vk_frame_dump.h
     renderer_vulkan/vk_graphics_pipeline.cpp
     renderer_vulkan/vk_graphics_pipeline.h
+    renderer_vulkan/typed_uniform_buffer.h
     renderer_vulkan/vk_multi_range_buffer.cpp
     renderer_vulkan/vk_multi_range_buffer.h
     renderer_vulkan/vk_master_semaphore.cpp
@@ -238,6 +247,7 @@ add_library(video_core STATIC
     renderer_vulkan/vk_swapchain.h
     renderer_vulkan/vk_texture_cache.cpp
     renderer_vulkan/vk_texture_cache.h
+    renderer_vulkan/vk_texture_transfer.h
     renderer_vulkan/vk_texture_cache_base.cpp
     renderer_vulkan/vk_turbo_mode.cpp
     renderer_vulkan/vk_turbo_mode.h
@@ -269,6 +279,7 @@ add_library(video_core STATIC
     shader_cache.h
     shader_environment.cpp
     shader_environment.h
+    graphics_input_capture.h
     shader_handle_program.h
     shader_notify.cpp
     shader_notify.h

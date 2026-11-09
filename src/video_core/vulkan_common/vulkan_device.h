@@ -582,7 +582,12 @@ FN_MAX_LIMIT_LIST
         return extensions.buffer_device_address;
     }
 
-    /// Returns true if formatless image load is supported.
+    /// Returns true if formatless image stores are supported.
+    bool IsFormatlessImageStoreSupported() const {
+        return features.features.shaderStorageImageWriteWithoutFormat;
+    }
+
+    /// Returns true if formatless image loads are supported.
     bool IsFormatlessImageLoadSupported() const {
         return features.features.shaderStorageImageReadWithoutFormat;
     }

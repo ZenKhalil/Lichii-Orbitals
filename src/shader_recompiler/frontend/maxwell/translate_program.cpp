@@ -362,7 +362,8 @@ void TightenOutputVertices(IR::Program& program) {
 } // Anonymous namespace
 
 IR::Program TranslateProgram(ObjectPool<IR::Inst>& inst_pool, ObjectPool<IR::Block>& block_pool,
-                             Environment& env, Flow::CFG& cfg, const HostTranslateInfo& host_info) {
+                             Environment& env, Flow::CFG& cfg, const HostTranslateInfo& host_info,
+                             const TranslationOptions* options) {
     HostTranslateInfo normalized_host_info{host_info};
     normalized_host_info.ApplyDescriptorLimitPolicy();
 
@@ -455,12 +456,12 @@ IR::Program TranslateProgram(ObjectPool<IR::Inst>& inst_pool, ObjectPool<IR::Blo
     Optimization::GeometryCompactionPass(program, normalized_host_info);
     Optimization::TexturePass(env, program, normalized_host_info);
 
-    if (Settings::values.resolution_info.active) {
+    if (options ? options->enable_rescaling : Settings::values.resolution_info.active) {
         Optimization::RescalingPass(program);
     }
     Optimization::DeadCodeEliminationPass(program);
     TightenOutputVertices(program);
-    if (Settings::values.renderer_debug) {
+    if (options ? options->verify_ir : Settings::values.renderer_debug.GetValue()) {
         Optimization::VerificationPass(program);
     }
     Optimization::CollectShaderInfoPass(env, program);

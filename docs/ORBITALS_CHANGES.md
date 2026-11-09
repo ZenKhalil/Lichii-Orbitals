@@ -1,5 +1,31 @@
 # Orbitals change notes
 
+## Build 3 integration — Vulkan correctness
+
+The integrated source corrects presentation and texture-transfer dependencies,
+repeated buffer-upload ordering, dynamic vertex-stride declarations and the
+Win32 surface instance. Eligible uniform/storage texel operations select
+matching numeric-class variants from immutable compiler inputs while retaining
+the prepared view format, offset and range. Known-conflicting compute captures
+are rejected before cache serialization; existing cache records are preserved.
+
+The focused recorder tests and candidate Vulkan runs are recorded in the
+[validation findings](nx2/vulkan-validation-findings.md). Candidate 7 passed
+174 selected native cases and 96 compiler/cache cases, then completed the full
+opening, co-op movement and normal shutdown with both experiments off.
+Its opening samples measured 29.59 / 29.45 FPS and stationary room samples
+24.28 / 25.00 FPS. See [runtime results](C7_RUNTIME_RESULTS.md) for scope and
+audio totals. These are candidate results; the numbered artifact requires its
+own identity, linked tests and runtime smoke before release.
+
+The extra-PAUSE experiment remains disabled because it showed no benefit.
+The two-uniform experiment also remains disabled: its enabled Vulkan run
+selected compatible types for the eligible target but hung after close.
+The shutdown cause is unconfirmed and tracked in
+[#34](https://github.com/ZenKhalil/Lichii-Orbitals/issues/34).
+Remaining multi-resource numeric mismatches, intermittent visual artifacts and
+sustained 30-FPS room performance are unresolved. Full shader preload remains 0.
+
 ## Build 2 — viewport dependency correction
 
 Build 2 marks Vulkan viewport state dirty when `depth_mode`

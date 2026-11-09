@@ -83,7 +83,30 @@ struct TransformFeedbackVarying {
     u32 components{};
 };
 
+enum class ImageBufferStoreType : u8 {
+    Float,
+    Uint,
+    Sint,
+};
+
+// Numeric class of one uniform texel-buffer declaration. This is an immutable
+// pipeline specialization input; it must not be changed on an existing pipeline.
+enum class UniformTexelType : u8 {
+    Float,
+    Uint,
+    Sint,
+};
+
 struct RuntimeInfo {
+    // Empty preserves the original float declarations. Otherwise one entry is
+    // required for every texture_buffer_descriptors entry, in that exact order.
+    std::vector<UniformTexelType> uniform_texel_types;
+
+    // Narrow compute family only; callers must validate its complete descriptor/IR contract.
+    std::optional<ImageBufferStoreType> single_image_buffer_store_type;
+    std::optional<bool> enable_shader_loop_safety;
+    // Families freeze this Android-only emitter option; other callers retain the global default.
+    std::optional<bool> enable_bloom_workaround;
     std::array<AttributeType, 32> generic_input_types{};
     VaryingState previous_stage_stores;
     /// Fragment stage after a mesh program: generic inputs it writes per primitive.

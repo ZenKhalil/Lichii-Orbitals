@@ -69,17 +69,23 @@ Recurring source-depth and cached-compute replay diagnostics are tracked in
 [#25](https://github.com/ZenKhalil/Lichii-Orbitals/issues/25). Their effect on
 rendering and loading remains unconfirmed.
 
-The latest tested local diagnostic, unreleased **Build 3 candidate 6**, retains
-the earlier synchronization and typed-buffer repairs and rejects conflicting
-compute captures before serialization. Its same-binary CPU wait experiment
-showed no benefit: one-PAUSE room samples ranged from **24.17 to 25.24 FPS**,
-while the extra-PAUSE run measured **22.71 / 23.73 FPS**. The extra PAUSE stays
-disabled. See the [comparison and limitations](docs/CANDIDATE6_SAME_BINARY_RESULTS.md).
+The latest tested local diagnostic, unreleased **Build 3 candidate 7**, completed
+the opening without skips, local co-op movement and normal shutdown with its
+two-uniform experiment off. Opening samples measured **29.59 / 29.45 FPS**;
+initial-room samples measured **24.28 / 25.00 FPS**. All four measured audio
+brackets added no padding or retries. It retains the synchronization, narrow
+typed-buffer and conflicting-cache-capture repairs; the numbered release is
+being prepared in [one integration PR](https://github.com/ZenKhalil/Lichii-Orbitals/pull/33).
+
+The optional two-uniform path selected compatible types for its eligible target,
+but its instrumented run hung after close. It remains disabled; the cause is
+tracked in [#34](https://github.com/ZenKhalil/Lichii-Orbitals/issues/34).
+See the [candidate's runtime results](docs/C7_RUNTIME_RESULTS.md).
+The extra-PAUSE CPU experiment also stays disabled: its same-binary comparison
+showed no benefit ([results](docs/CANDIDATE6_SAME_BINARY_RESULTS.md)).
 The user reported that the left-view issue was absent in the latest check;
-the intermittent symptom is not yet proven fixed. Earlier validation still
-identified shaders outside the narrow typed-buffer policy. A separate
-Candidate 7 is being tested for two-declaration compute shaders. Neither
-candidate currently replaces the recommended Build 2 release.
+the intermittent symptom is not yet proven fixed. Build 2 remains recommended
+until the numbered Build 3 artifact passes its own checks.
 The earlier monitor-endpoint loss and shutdown hang remain open in
 [#16](https://github.com/ZenKhalil/Lichii-Orbitals/issues/16); testing on a connected
 headset does not demonstrate device-loss recovery.

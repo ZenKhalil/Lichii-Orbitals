@@ -1562,21 +1562,54 @@ void EmitContext::DefineTextureBuffers(const Info& info, u32& binding) {
         return;
     }
     const spv::ImageFormat format{spv::ImageFormat::Unknown};
-    image_buffer_type = TypeImage(F32[1], spv::Dim::Buffer, 0U, false, false, 1, format);
-
-    const Id type{TypePointer(spv::StorageClass::UniformConstant, image_buffer_type)};
+    // Keep the unspecialized declaration order and shared type unchanged.
+    const bool specialized = !runtime_info.uniform_texel_types.empty();
+    const Id legacy_image_type{specialized ? Id{} : TypeImage(F32[1], spv::Dim::Buffer, 0U,
+                                                             false, false, 1, format)};
+    const Id legacy_pointer_type{specialized ? Id{} : TypePointer(
+        spv::StorageClass::UniformConstant, legacy_image_type)};
     texture_buffers.reserve(info.texture_buffer_descriptors.size());
     for (const TextureBufferDescriptor& desc : info.texture_buffer_descriptors) {
         if (desc.count != 1) {
             throw NotImplementedException("Array of texture buffers");
         }
+        const auto numeric = runtime_info.uniform_texel_types.empty()
+                                 ? UniformTexelType::Float
+                                 : runtime_info.uniform_texel_types.at(texture_buffers.size());
+        Id scalar_type;
+        Id result_type;
+        switch (numeric) {
+        case UniformTexelType::Float:
+            scalar_type = F32[1];
+            result_type = F32[4];
+            break;
+        case UniformTexelType::Uint:
+            scalar_type = U32[1];
+            result_type = U32[4];
+            break;
+        case UniformTexelType::Sint:
+            scalar_type = S32[1];
+            result_type = S32[4];
+            break;
+        default:
+            throw LogicError("Invalid uniform texel numeric class");
+        }
+        const Id image_type{specialized ? TypeImage(scalar_type, spv::Dim::Buffer, 0U, false,
+                                                    false, 1, format)
+                                        : legacy_image_type};
+        const Id type{specialized ? TypePointer(spv::StorageClass::UniformConstant, image_type)
+                                  : legacy_pointer_type};
         const Id id{AddGlobalVariable(type, spv::StorageClass::UniformConstant)};
         Decorate(id, spv::Decoration::Binding, binding);
         Decorate(id, spv::Decoration::DescriptorSet, 0U);
         Name(id, NameOf(stage, desc, "texbuf"));
         texture_buffers.push_back({
             .id = id,
+            .image_type = image_type,
+            .pointer_type = type,
+            .result_type = result_type,
             .count = desc.count,
+            .is_integer = numeric != UniformTexelType::Float,
         });
         if (profile.supported_spirv >= 0x00010400) {
             interfaces.push_back(id);
@@ -1589,7 +1622,20 @@ void EmitContext::DefineImageBuffers(const Info& info, u32& binding) {
     image_buffers.reserve(info.image_buffer_descriptors.size());
     for (const ImageBufferDescriptor& desc : info.image_buffer_descriptors) {
         const spv::ImageFormat format{GetImageFormat(desc.format)};
-        const Id sampled_type{desc.is_integer ? U32[1] : F32[1]};
+        Id sampled_type{desc.is_integer ? U32[1] : F32[1]};
+        if (runtime_info.single_image_buffer_store_type) {
+            switch (*runtime_info.single_image_buffer_store_type) {
+            case ImageBufferStoreType::Float:
+                sampled_type = F32[1];
+                break;
+            case ImageBufferStoreType::Uint:
+                sampled_type = U32[1];
+                break;
+            case ImageBufferStoreType::Sint:
+                sampled_type = S32[1];
+                break;
+            }
+        }
         const Id image_type{
             TypeImage(sampled_type, spv::Dim::Buffer, false, false, false, 2, format)};
         const Id pointer_type{TypePointer(spv::StorageClass::UniformConstant, image_type)};

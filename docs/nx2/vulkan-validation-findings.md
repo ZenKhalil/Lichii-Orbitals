@@ -1,5 +1,11 @@
 # Vulkan validation findings
 
+Latest follow-up: [Candidate 7 runtime results](../C7_RUNTIME_RESULTS.md) cover
+the exact-two experiment's positive and negative controls, capped validation
+output, its failed enabled shutdown, and the separate normal disabled run.
+The experiment remains off; the original and intermediate findings below are
+retained as historical evidence.
+
 On 2026-11-09, a separate diagnostic run of Build 2 (`c7ada3ec4119d69fce7290e8ec6e09b847263972`)
 loaded Khronos validation from commit `2f953039cb303878b3fb312f3932faeea6ade074`.
 The exact loaded module and enabled core/synchronization categories were verified.

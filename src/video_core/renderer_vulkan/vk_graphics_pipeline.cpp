@@ -24,6 +24,8 @@
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
 #include "video_core/renderer_vulkan/vk_frame_dump.h"
 #include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
+#include "video_core/renderer_vulkan/typed_uniform_buffer.h"
+#include "video_core/renderer_vulkan/texel_type_trace_capture.h"
 #include "video_core/renderer_vulkan/vk_render_pass_cache.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
@@ -489,8 +491,51 @@ void GraphicsPipeline::AddTransition(GraphicsPipeline* transition) {
     transitions.push_back(transition);
 }
 
+void GraphicsPipeline::SetUniformFamily(
+    std::array<std::unique_ptr<GraphicsPipeline>, 3> members, std::array<bool, 3> supported) {
+    if (!IsBuilt() || Failed() || !pipeline || mesh_emulation || members[0]) {
+        throw Shader::LogicError("Incomplete vertex texel family base");
+    }
+    for (size_t index = 1; index < members.size(); ++index) {
+        const auto& member = members[index];
+        if (!member || !member->IsBuilt() || member->Failed() || !member->pipeline ||
+            member->mesh_emulation || member->key != key || member->stage_infos != stage_infos ||
+            member->num_descriptor_entries != num_descriptor_entries ||
+            member->uses_push_descriptor != uses_push_descriptor ||
+            member->uses_descriptor_buffer != uses_descriptor_buffer ||
+            member->descriptor_buffer_layout.size != descriptor_buffer_layout.size ||
+            !std::ranges::equal(member->descriptor_buffer_layout.bindings,
+                                descriptor_buffer_layout.bindings, [](const auto& a, const auto& b) {
+                                    return a.type == b.type && a.count == b.count &&
+                                           a.offset == b.offset && a.stride == b.stride;
+                                })) {
+            throw Shader::LogicError("Incompatible vertex texel family layout");
+        }
+    }
+    for (size_t index = 1; index < members.size(); ++index) {
+        members[index]->uniform_type = static_cast<Shader::UniformTexelType>(index);
+    }
+    uniform_type = Shader::UniformTexelType::Float;
+    uniform_formats = supported;
+    uniform_family = std::move(members);
+}
+
+GraphicsPipeline* GraphicsPipeline::SelectUniformPipeline(VkFormat format) noexcept {
+    const auto type = TypedUniformType(format, uniform_formats);
+    if (!type || *type == Shader::UniformTexelType::Float) {
+        return this;
+    }
+    return uniform_family[static_cast<size_t>(*type)].get();
+}
+
 template <typename Spec>
 bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
+    TexelTypeTrace::Scope texel_trace{&guest_descriptor_queue,
+                                    !IsMeshPipeline() && !IsEmulatedMesh()};
+    if (texel_trace.Active()) {
+        texel_trace.SetUniformFamilyAssessment(&uniform_assessment);
+    }
+    GraphicsPipeline* selected = this;
     boost::container::small_vector<VideoCommon::ImageViewInOut, 160> views;
     boost::container::small_vector<VideoCommon::SamplerId, 96> samplers;
     views.reserve(num_image_elements);
@@ -644,6 +689,13 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
     if constexpr (Spec::has_texture_buffers || Spec::has_image_buffers) {
         VideoCommon::ImageViewInOut* texture_buffer_it{views.data()};
         const auto bind_stage_info{[&](size_t stage) LAMBDA_FORCEINLINE {
+            TexelTypeTrace::Offsets trace_offsets;
+            if (texel_trace.Active()) {
+                for (size_t previous = 0; previous < stage; ++previous) {
+                    trace_offsets.SkipStage(stage_infos[previous]);
+                }
+                trace_offsets.SkipBuffers(stage_infos[stage]);
+            }
             size_t index{};
             const auto add_buffer{[&](const auto& desc) {
                 constexpr bool is_image = std::is_same_v<decltype(desc), const ImageBufferDescriptor&>;
@@ -659,11 +711,36 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
                             format = *explicit_format;
                         }
                     }
+                    if (texel_trace.Active() && !(uniform_type && stage == 0 && !is_image)) {
+                        const auto& config = regs.pipelines[stage + 1];
+                        const bool native = maxwell3d->GetNativeMacroEngine().native_turing;
+                        const TexelTypeTrace::Identity identity{
+                            .hash = key.unique_hashes[stage + 1],
+                            .auxiliary_hash = stage == 0 ? key.unique_hashes[0] : 0,
+                            .program_address = native
+                                ? (u64{config.reserved[0] & 0xff} << 32) | config.reserved[1]
+                                : regs.program_region.Address() + config.offset,
+                            .stage = static_cast<u32>(stage),
+                            .native = native,
+                        };
+                        TexelTypeTrace::Capture(
+                            texel_trace, stage_infos[stage], identity, trace_offsets, desc, i,
+                            texture_buffer_it->index,
+                            Tegra::Texture::TextureHeaderIndex(texture_buffer_it->index,
+                                                               regs.tex_header.limit,
+                                                               gpu_memory->UsesNativeTiling()),
+                            image_view.format, format, image_view.GpuAddr(), image_view.BufferSize(),
+                            static_cast<u32>(image_view.type));
+                    }
                     buffer_cache.BindGraphicsTextureBuffer(stage, index, image_view.GpuAddr(),
                                                            image_view.BufferSize(), format,
                                                            is_written, is_image);
                     ++index;
                     ++texture_buffer_it;
+                }
+                if (texel_trace.Active()) {
+                    ++trace_offsets.binding;
+                    trace_offsets.entry += desc.count;
                 }
             }};
             buffer_cache.UnbindGraphicsTextureBuffers(stage);
@@ -731,6 +808,12 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
     {
         Profile::Scope scope{Profile::Zone::DescriptorAcquire};
         guest_descriptor_queue.Acquire(scheduler, num_descriptor_entries, uses_descriptor_buffer);
+        if (uniform_type) {
+            const auto& info = stage_infos[0];
+            guest_descriptor_queue.ObserveTexelBufferFormat(
+                Shader::NumDescriptors(info.constant_buffer_descriptors) +
+                Shader::NumDescriptors(info.storage_buffers_descriptors));
+        }
     }
 
     RescalingPushConstant rescaling;
@@ -741,6 +824,44 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
         {
             Profile::Scope scope{Profile::Zone::BindStageBuffers};
             buffer_cache.BindHostStageBuffers(stage);
+        }
+        if (uniform_type && stage == 0) {
+            const auto prepared = guest_descriptor_queue.TakeTexelBufferBinding();
+            if (!prepared) {
+                throw Shader::LogicError("Vertex texel family has no prepared host view");
+            }
+            selected = SelectUniformPipeline(prepared->format);
+            if (!selected) {
+                throw Shader::LogicError("Vertex texel family has no compatible member");
+            }
+            if (texel_trace.Active()) {
+                const auto& info = stage_infos[0];
+                const auto& view = texture_cache.GetImageView(views_it->id);
+                const auto& config = regs.pipelines[1];
+                const TexelTypeTrace::Identity identity{
+                    .hash = key.unique_hashes[1],
+                    .program_address = (u64{config.reserved[0] & 0xff} << 32) | config.reserved[1],
+                    .stage = 0,
+                    .native = true,
+                };
+                TexelTypeTrace::Offsets offsets;
+                offsets.SkipBuffers(info);
+                const auto numeric = *selected->uniform_type == Shader::UniformTexelType::Float
+                                         ? TexelTypeTrace::Numeric::Float
+                                     : *selected->uniform_type == Shader::UniformTexelType::Sint
+                                         ? TexelTypeTrace::Numeric::Sint
+                                         : TexelTypeTrace::Numeric::Uint;
+                TexelTypeTrace::Capture(texel_trace, info, identity, offsets,
+                    info.texture_buffer_descriptors.front(), 0, views_it->index,
+                    Tegra::Texture::TextureHeaderIndex(views_it->index, regs.tex_header.limit,
+                                                       gpu_memory->UsesNativeTiling()),
+                    view.format, view.format, view.GpuAddr(), view.BufferSize(),
+                    static_cast<u32>(view.type), numeric);
+                TexelTypeTrace::Scope::Host(&guest_descriptor_queue, offsets.entry,
+                    TexelTypeTrace::Handle(prepared->view), prepared->offset, prepared->size,
+                    static_cast<u32>(prepared->format));
+            }
+
         }
         {
             Profile::Scope scope{Profile::Zone::PushDescriptors};
@@ -802,15 +923,16 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
             scheduler.RequestOutsideRenderPassOperationContext();
         }
     }
-    if (IsBuilt() && (!pipeline || build->Failed())) {
+    if (selected->IsBuilt() && (!selected->pipeline || selected->build->Failed())) {
         return false;
     }
     Profile::Scope scope{Profile::Zone::ConfigureDraw};
-    return ConfigureDraw(rescaling, render_area);
+    return ConfigureDraw(rescaling, render_area, selected);
 }
 
 bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
-                                     const RenderAreaPushConstant& render_area) {
+                                     const RenderAreaPushConstant& render_area,
+                                     GraphicsPipeline* selected) {
     if (guest_descriptor_queue.UpdateCount() != num_descriptor_entries) {
         LOG_CRITICAL(Render_Vulkan, "Graphics descriptor count mismatch: expected {}, got {}",
                      num_descriptor_entries, guest_descriptor_queue.UpdateCount());
@@ -982,11 +1104,11 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
     if (writes_storage) {
         scheduler.NoteRenderPassStores();
     }
-    if (!IsBuilt()) {
-        // Wait for the pipeline to be built
-        scheduler.Record([this](vk::CommandBuffer) {
+    if (!selected->IsBuilt()) {
+        // The selected member is fixed for this queued draw.
+        scheduler.Record([selected](vk::CommandBuffer) {
             const auto begin = std::chrono::steady_clock::now();
-            build->Wait(!worker_only_build);
+            selected->build->Wait(!selected->worker_only_build);
             hold_time_ns.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                        std::chrono::steady_clock::now() - begin)
                                        .count(),
@@ -995,7 +1117,7 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
     }
     const bool is_rescaling{texture_cache.IsRescaling()};
     const bool update_rescaling{scheduler.UpdateRescaling(is_rescaling, IsMeshPipeline())};
-    const bool bind_pipeline{scheduler.UpdateGraphicsPipeline(this)};
+    const bool bind_pipeline{scheduler.UpdateGraphicsPipeline(selected)};
     const bool bind_descriptor_buffer{
         descriptor_set_layout && uses_descriptor_buffer &&
         scheduler.UpdateDescriptorBufferChunk(descriptor_buffer_chunk)};
@@ -1018,22 +1140,27 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
             last_descriptor_payload.assign(entries, entries + num_descriptor_entries);
         }
     }
-    scheduler.Record([this, descriptor_data, bind_pipeline, update_descriptors,
+    scheduler.Record([this, selected, descriptor_data, bind_pipeline, update_descriptors,
                       descriptor_buffer_offset, descriptor_buffer_chunk, bind_descriptor_buffer,
                       rescaling_data = rescaling.Data(), is_rescaling, update_rescaling,
                       uses_render_area = render_area.uses_render_area,
-                      render_area_data = render_area.words](vk::CommandBuffer cmdbuf) {
+                      render_area_data = render_area.words,
+                      texel_trace = TexelTypeTrace::Scope::SealCurrent()](vk::CommandBuffer cmdbuf) {
+        if (texel_trace) {
+            TexelTypeTrace::Report(texel_trace, TexelTypeTrace::Handle(*selected->pipeline),
+                                  selected->pipeline && !selected->build->Failed(), uses_descriptor_buffer);
+        }
         if (bind_descriptor_buffer) {
             const VkDescriptorBufferBindingInfoEXT binding_info{
                 descriptor_buffer_ring.BindingInfo(descriptor_buffer_chunk)};
             cmdbuf.BindDescriptorBuffersEXT(binding_info);
         }
         if (bind_pipeline) {
-            scheduler.SetGraphicsPipelineMissing(!pipeline || build->Failed());
-            if (!pipeline || build->Failed()) {
+            scheduler.SetGraphicsPipelineMissing(!selected->pipeline || selected->build->Failed());
+            if (!selected->pipeline || selected->build->Failed()) {
                 return;
             }
-            cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, *pipeline);
+            cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_GRAPHICS, *selected->pipeline);
         }
         const VkShaderStageFlags push_stages =
             mesh_emulation ? VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_COMPUTE_BIT
@@ -1431,10 +1558,9 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
         };
         dynamic_states.insert(dynamic_states.end(), extended.begin(), extended.end());
 
-        // VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE_EXT
-        if (!key.state.dynamic_vertex_input) {
-            dynamic_states.push_back(VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE_EXT);
-        }
+        // Buffer bindings supply strides even when full vertex input is dynamic.
+        // Both setters must agree with the pipeline's declared dynamic states.
+        dynamic_states.push_back(VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE_EXT);
     }
 
     // VK_DYNAMIC_STATE_VERTEX_INPUT_EXT

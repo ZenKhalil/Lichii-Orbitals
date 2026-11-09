@@ -18,10 +18,12 @@
 
 #include "common/thread_worker.h"
 #include "shader_recompiler/shader_info.h"
+#include "shader_recompiler/runtime_info.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/renderer_vulkan/fixed_pipeline_state.h"
 #include "video_core/renderer_vulkan/pipeline_build.h"
 #include "video_core/renderer_vulkan/pipeline_helper.h"
+#include "video_core/renderer_vulkan/uniform_family_assessment.h"
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
 #include "video_core/renderer_vulkan/vk_descriptor_buffer.h"
 #include "video_core/renderer_vulkan/vk_descriptor_pool.h"
@@ -220,6 +222,20 @@ public:
 
     void AddTransition(GraphicsPipeline* transition);
 
+    // Complete synchronous members only; called before cache publication.
+    void SetUniformFamily(std::array<std::unique_ptr<GraphicsPipeline>, 3> members,
+                          std::array<bool, 3> supported);
+
+    // Assigned only before cache publication; workers never read this metadata.
+    void SetUniformFamilyAssessment(const UniformFamilyAssessment& assessment) noexcept {
+        uniform_assessment = assessment;
+        for (auto& member : uniform_family) {
+            if (member) {
+                member->uniform_assessment = assessment;
+            }
+        }
+    }
+
     bool Configure(bool is_indexed) {
         return configure_func(this, is_indexed);
     }
@@ -283,7 +299,9 @@ private:
     bool ConfigureImpl(bool is_indexed);
 
     bool ConfigureDraw(const RescalingPushConstant& rescaling,
-                       const RenderAreaPushConstant& render_are);
+                       const RenderAreaPushConstant& render_are, GraphicsPipeline* selected);
+
+    GraphicsPipeline* SelectUniformPipeline(VkFormat format) noexcept;
 
     void MakePipeline(VkRenderPass render_pass);
 
@@ -309,6 +327,10 @@ private:
 
     std::array<vk::ShaderModule, NUM_STAGES> spv_modules;
 
+    UniformFamilyAssessment uniform_assessment;
+    std::optional<Shader::UniformTexelType> uniform_type;
+    std::array<std::unique_ptr<GraphicsPipeline>, 3> uniform_family;
+    std::array<bool, 3> uniform_formats{};
     std::array<Shader::Info, NUM_STAGES> stage_infos;
     std::array<u32, 5> enabled_uniform_buffer_masks{};
     VideoCommon::UniformBufferSizes uniform_buffer_sizes{};

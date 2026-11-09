@@ -96,6 +96,14 @@ add_executable(tests
     video_core/ampere_ported_textures.cpp
     video_core/ampere_tennis_i2f.cpp
     video_core/ampere_tennis_tessellation.cpp
+    video_core/compute_input_replay.cpp
+    video_core/typed_buffer_store.cpp
+    video_core/mixed_buffer_store.cpp
+    video_core/compute_uniform_family.cpp
+    video_core/compute_uniform_tuples.cpp
+    video_core/uniform_texel_emitter.cpp
+    video_core/graphics_input_capture.cpp
+    video_core/graphics_uniform_replay.cpp
     video_core/pipeline_cache_files.cpp
     video_core/storage_binding_capacity.cpp
     video_core/native_indirect_reset.cpp
@@ -161,6 +169,7 @@ add_executable(tests
     video_core/uniform_stream_reuse.cpp
     video_core/usage_tracker.cpp
     video_core/shader_invalidation.cpp
+    video_core/texel_type_trace.cpp
     video_core/descriptor_table.cpp
     video_core/descriptor_payload_growth.cpp
     video_core/global_address_tracking.cpp
@@ -172,6 +181,9 @@ add_executable(tests
     video_core/shader_attributes.cpp
     video_core/indirect_reset.cpp
     video_core/viewport_dirty_state.cpp
+    video_core/present_transfer_sync.cpp
+    video_core/texture_transfer_sync.cpp
+    video_core/buffer_upload_sync.cpp
     input_common/calibration_configuration_job.cpp
 )
 
@@ -185,6 +197,7 @@ if (TARGET dynarmic::dynarmic)
     target_link_libraries(tests PRIVATE dynarmic::dynarmic)
     if (WIN32 AND ARCHITECTURE_x86_64)
         target_sources(tests PRIVATE common/dynarmic_spin_lock.cpp)
+        target_sources(tests PRIVATE common/dynarmic_pause2.cpp)
     endif()
 endif()
 

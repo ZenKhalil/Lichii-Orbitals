@@ -6,7 +6,10 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
+#include <memory>
+#include <optional>
 #include <condition_variable>
 #include <functional>
 #include <mutex>
@@ -17,7 +20,11 @@
 #include "common/common_types.h"
 #include "common/thread_worker.h"
 #include "shader_recompiler/shader_info.h"
+#include "shader_recompiler/runtime_info.h"
+#include "video_core/renderer_vulkan/compute_uniform2.h"
 #include "video_core/renderer_vulkan/pipeline_helper.h"
+#include "video_core/renderer_vulkan/typed_uniform_compute.h"
+#include "video_core/renderer_vulkan/uniform_family_assessment.h"
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
 #include "video_core/renderer_vulkan/vk_descriptor_buffer.h"
 #include "video_core/renderer_vulkan/vk_descriptor_pool.h"
@@ -44,7 +51,11 @@ public:
                              Common::ThreadWorker* thread_worker,
                              PipelineStatistics* pipeline_statistics,
                              VideoCore::ShaderNotify* shader_notify, const Shader::Info& info,
-                             vk::ShaderModule spv_module, u64 shader_hash);
+                             vk::ShaderModule spv_module, u64 shader_hash,
+                             std::optional<Shader::ImageBufferStoreType> store_type = std::nullopt,
+                             std::optional<Shader::UniformTexelType> uniform_type = std::nullopt,
+                             UniformFamilyAssessment uniform_assessment = {},
+                             std::optional<Uniform2Types> uniform2_types = std::nullopt);
 
     ComputePipeline& operator=(ComputePipeline&&) noexcept = delete;
     ComputePipeline(ComputePipeline&&) noexcept = delete;
@@ -59,7 +70,18 @@ public:
                                  BufferCache& buffer_cache, TextureCache& texture_cache,
                                  TextureCacheRuntime& texture_runtime,
                                  std::optional<ByteAddressedShadow>& shadow,
-                                 BindCommand* deferred_bind = nullptr);
+                                 BindCommand* deferred_bind = nullptr,
+                                 ComputePipeline** selected_pipeline = nullptr);
+
+    // Called before publication, with synchronous, fully built children only.
+    void SetStoreFamily(std::array<std::unique_ptr<ComputePipeline>, 3> members,
+                        std::array<bool, 4> formats);
+
+    void SetUniformFamily(std::array<std::unique_ptr<ComputePipeline>, 3> members,
+                          std::array<bool, ComputeUniformFormats.size()> formats);
+
+    void SetUniform2Family(std::array<std::unique_ptr<ComputePipeline>, Uniform2MemberCount> members,
+                           std::array<bool, UniformTupleFormats.size()> formats);
 
     static constexpr u64 Ocarina1440pShader = 0x6bd913e1f34e83ebULL;
     [[nodiscard]] bool CanReplaceOcarinaUpscale() const;
@@ -93,12 +115,41 @@ public:
 
     /// Whether no build of this pipeline is left queued on a worker thread, which holds it
     [[nodiscard]] bool IsBuildTaskDone() const noexcept {
-        return build_task_done.load(std::memory_order::acquire);
+        if (!build_task_done.load(std::memory_order::acquire)) {
+            return false;
+        }
+        for (const auto& member : store_family) {
+            if (member && !member->IsBuildTaskDone()) {
+                return false;
+            }
+        }
+        for (const auto& member : uniform_family) {
+            if (member && !member->IsBuildTaskDone()) {
+                return false;
+            }
+        }
+        for (const auto& member : uniform2_family) {
+            if (member && !member->IsBuildTaskDone()) {
+                return false;
+            }
+        }
+        return true;
     }
 
 private:
     /// Builds the pipeline once, on whichever thread gets here first.
     void RunBuild();
+    [[nodiscard]] ComputePipeline* SelectStorePipeline(VkFormat format) noexcept;
+    [[nodiscard]] ComputePipeline* SelectUniformPipeline(VkFormat format) noexcept;
+
+    [[nodiscard]] ComputePipeline* SelectUniform2Pipeline(
+        const std::array<VkFormat, 2>& formats) noexcept;
+
+    struct PreparedUniform2 {
+        ComputePipeline* pipeline;
+        UpdateDescriptorQueue::TexelBufferObservation::Result bindings;
+    };
+    [[nodiscard]] PreparedUniform2 ResolveUniform2Pipeline();
 
     const Device& device;
     vk::PipelineCache& pipeline_cache;
@@ -106,6 +157,16 @@ private:
     DescriptorBufferRing& descriptor_buffer_ring;
     Shader::Info info;
     u64 shader_hash{};
+    const UniformFamilyAssessment uniform_assessment;
+    std::optional<Shader::ImageBufferStoreType> store_type;
+    std::array<std::unique_ptr<ComputePipeline>, 3> store_family;
+    std::array<bool, 4> store_formats{};
+    std::optional<Shader::UniformTexelType> uniform_type;
+    std::array<std::unique_ptr<ComputePipeline>, 3> uniform_family;
+    std::array<bool, ComputeUniformFormats.size()> uniform_formats{};
+    std::optional<Uniform2Types> uniform2_types;
+    std::array<std::unique_ptr<ComputePipeline>, Uniform2MemberCount> uniform2_family;
+    std::array<bool, UniformTupleFormats.size()> uniform2_formats{};
     u32 num_descriptor_entries{};
     boost::container::small_vector<VideoCommon::ImageViewId, 8> written_images;
     std::vector<SampledImage> sampled_images;

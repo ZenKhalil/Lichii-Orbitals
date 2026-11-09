@@ -1764,9 +1764,10 @@ void RasterizerVulkan::DispatchCompute() {
     constexpr bool can_replace = false;
 #endif
     ComputePipeline::BindCommand deferred_bind;
+    ComputePipeline* selected_pipeline = pipeline;
     if (!pipeline->Configure(*kepler_compute, *gpu_memory, scheduler, buffer_cache,
                              texture_cache, texture_cache_runtime, byte_addressed_shadow,
-                             can_replace ? &deferred_bind : nullptr)) {
+                             can_replace ? &deferred_bind : nullptr, &selected_pipeline)) {
         if (kepler_compute->IsNativeMode()) throw Shader::RuntimeError("Native compute resources unavailable");
         return;
     }
@@ -1832,9 +1833,9 @@ void RasterizerVulkan::DispatchCompute() {
         scheduler.RequestOutsideRenderPassOperationContext();
         record_read_barrier();
         scheduler.TraceComputePipeline(pipeline->ShaderHash());
-        scheduler.Record([this, pipeline, indirect_buffer = buffer->Handle(),
+        scheduler.Record([this, pipeline, selected_pipeline, indirect_buffer = buffer->Handle(),
                           indirect_offset = offset](vk::CommandBuffer cmdbuf) {
-            if (!pipeline->IsBound()) {
+            if (!selected_pipeline->IsBound()) {
                 return;
             }
             scheduler.TraceGpuWork(cmdbuf, pipeline->ShaderHash(), 0, {}, [&] {
@@ -1862,7 +1863,7 @@ void RasterizerVulkan::DispatchCompute() {
 #else
     scheduler.TraceComputePipeline(pipeline->ShaderHash());
 #endif
-    scheduler.Record([this, pipeline, dim, byte_addressed_shadow, bind = std::move(deferred_bind)
+    scheduler.Record([this, pipeline, selected_pipeline, dim, byte_addressed_shadow, bind = std::move(deferred_bind)
 #ifdef EGLANTINE_STREAMLINE
                       , replacement
 #endif
@@ -1878,7 +1879,7 @@ void RasterizerVulkan::DispatchCompute() {
         if (bind) {
             bind(cmdbuf);
         }
-        if (!pipeline->IsBound()) {
+        if (!selected_pipeline->IsBound()) {
             return;
         }
         if (byte_addressed_shadow) {
