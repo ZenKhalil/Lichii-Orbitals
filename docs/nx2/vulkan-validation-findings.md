@@ -342,3 +342,111 @@ not establish a fix for the intermittent visual problem.
 release and selected launcher.** Uniform-texel faults, excluded storage cases,
 the original visual report, performance and audio-device-loss recovery remain
 open. Raw logs, game data and private configuration remain private.
+
+## Build 3 candidate 4
+
+Source [`d133a00d`](https://github.com/ZenKhalil/Lichii-Orbitals/commit/d133a00d7710719892f9645716db4072b69e4691)
+adds typed uniform-texel emission in [PR 21](https://github.com/ZenKhalil/Lichii-Orbitals/pull/21),
+narrow vertex families in [PR 22](https://github.com/ZenKhalil/Lichii-Orbitals/pull/22),
+and compute families in [PR 23](https://github.com/ZenKhalil/Lichii-Orbitals/pull/23).
+The test binary from the final candidate build passed 155 cases and 51,888,092
+assertions in the combined selection;
+the separate compiler/cache selection passed 95 cases and 448,211 assertions.
+Overlapping selections are not additive. All 38 packaged PE files passed the
+dependency check, and the 35 runtime DLL identities matched the prior candidate.
+
+Nine actual-emitter GPU fetch cases passed mandatory raw integer, finite-float,
+missing-component and canary checks with no Core or Synchronization error.
+Special floating-point observations remain GPU-specific. These fixtures test
+emitted values, not the complete graphics draw, queued lifetime or game pixels.
+
+Transient checksum-download failures required a reviewed local configure-module
+override for four exact dependency URLs. Cached archives and installed inputs
+were checked; dependencies were not substituted. Compiled application source
+matched the stated commit, but the configure module was an additional input.
+This candidate is not a public binary release. Any later release must either
+include the exact portable override/checksum inputs and instructions in its
+corresponding source or rebuild with the original configure module.
+
+### Validation run
+
+The 827-second run positively verified the pinned layer and Core/Synchronization
+checks. Both output streams reached EOF without truncation or capture errors.
+It reached the room, camera movement and both-player walking after opening skips.
+
+Two observed compute shaders used matching UINT declarations and R32_UINT views,
+including a shader that had mismatched in Candidate 3. Other workloads remained
+excluded. The known vertex shader explicitly reported `single_fetch=false` at
+construction and retained its FLOAT/R32_UINT mismatch. The graphics control quota
+had already been consumed by earlier descriptors; absent later controls are not
+evidence of a match.
+
+Validation recorded **41 errors and 20 warnings**: 20 compute numeric-type errors,
+20 indexed-draw numeric-type errors, one private-data feature error, and 20
+depth-layer compatibility warnings. Both texel categories and the warning
+category reached their message limits. All 40 texel errors matched exact
+pipeline/view/set/binding/element metadata. The 216 trace rows also contained
+64 storage mismatches in shaders with stage-wide image atomics; this does not
+establish an atomic operation on the mismatched descriptor itself. No
+synchronization, vertex-stride or Win32 surface 01307 report was captured on
+this route. Bounded capture does not establish universal correctness.
+
+First presentation occurred at 20.222 seconds; stereo Open/Attach at
+38.170/38.172 seconds. The last audio counter, at 822.169 seconds, recorded
+37,491,584 copied and accepted frames, 1.415 seconds cumulative padding and no
+queue-full/retry count. No host audio failure or native graphics rejection was
+logged. The same 135 known pre-close errors remained.
+
+Faint bands appeared around both views' light cones/back walls. No broad glare
+was seen in these particular snapshots; different viewpoints prevent a fix claim.
+No FPS comparison is made under validation. UI close at 822.986 seconds led to
+ForceStop at 823.978 seconds and guest panic 1472 at 823.982 seconds. Cleanup
+completed at 826.024 seconds and the process exited without OS termination.
+This was an after-close panic, with no preceding host audio fault, and is not
+described as error-free teardown or attributed to the uniform-fetch change.
+
+### Normal run
+
+The same binary then completed the full opening without skips, with validation,
+texel tracing and heavy profiling off. No build or GPU test ran concurrently.
+The selected stereo headset, rendering settings and per-application clock policy
+matched Candidate 3. Caches were warm after validation.
+
+| Window | Duration | FPS | Frame time p99 |
+|---|---:|---:|---:|
+| Opening, middle | 30 seconds | 29.81 | 41.51 ms |
+| Opening, later | 20 seconds | 29.89 | 42.61 ms |
+| Initial room | 30 seconds | 24.83 | 51.04 ms |
+| Initial room, same-view repeat | 20 seconds | 25.51 | 46.05 ms |
+
+Both room measurements preceded camera/character movement. All four enclosing
+audio intervals added no padding, retries or queue-full events. These counters
+do not measure audible A/V alignment. Room FPS was higher than the preceding
+Candidate 3 samples but does not isolate a cause or establish stable 30 FPS.
+
+After movement, a closer stationary machinery view alternated broad blue glare,
+ordinary-looking lighting, reddish glare and broad blue glare again. The right
+camera remained in a different hallway view. This reproduces changing glare
+without establishing a specific shader cause, an identical-camera comparison or
+that every light effect is unintended. Faint initial-room bands also remained.
+
+The approximately 713-second run's last audio counter, at 707.003 seconds,
+recorded 32,320,912 copied and accepted frames, 302.7 ms cumulative padding,
+and no queue-full/retry count. No host audio fault, guest panic, native graphics
+rejection or unavailable typed-family message was logged. Exactly 135 known
+startup/cache/stub errors remained, with no new or after-close Error/Critical
+entry. UI close at 708.385 seconds led to cleanup at 711.485 seconds and normal
+OS exit without forced termination. Title and global configuration bytes matched
+their pre-run copies. This does not exercise audio-device-loss recovery.
+
+First presentation occurred at 15.217 seconds and stereo Open/Attach at
+33.003/33.005 seconds. The cache reported 3,852 pipelines at 8.805 seconds,
+73,703 skipped graphics entries and 64 background entries. The same three
+disk-replay classification failures occurred at 9.698–10.263 seconds; no explicit
+cache-completion marker exists. These are startup milestones, not cold-load or
+exact gameplay-readiness measurements; menu interaction included coordinator
+delays.
+
+**Candidate 4 is not promoted. Build 2 remains the latest recommended published
+release and selected launcher.** Rendering, performance, shutdown and audio
+device recovery issues remain open. Raw logs and game data remain private.

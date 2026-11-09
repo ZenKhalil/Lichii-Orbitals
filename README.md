@@ -69,13 +69,14 @@ Recurring source-depth and cached-compute replay diagnostics are tracked in
 [#25](https://github.com/ZenKhalil/Lichii-Orbitals/issues/25). Their effect on
 rendering and loading remains unconfirmed.
 
-The unreleased **Build 3 candidate 3** adds immutable compute-compiler inputs,
-typed variants for a narrow storage-write path, and the correct Win32 surface
-instance handle. Its bounded validation run retained uniform texel-buffer type faults
-and other excluded storage mismatches. Normal room samples measured
-**22.29 / 22.00 FPS**, below the earlier candidates; a repeatable cause for that
-difference has not been established. It does not replace the recommended Build 2
-release. See the [candidate results](docs/nx2/vulkan-validation-findings.md#build-3-candidate-3).
+The latest local diagnostic, unreleased **Build 3 candidate 4**, adds typed
+uniform-buffer fetch variants. Validation confirmed correct unsigned types for
+two observed compute shaders, while the known vertex shader remained excluded
+and other numeric-type faults persisted. Normal room samples measured
+**24.83 / 25.51 FPS**; broad changing glare was still visible near the machinery.
+This is not a stable 30 FPS or complete rendering fix, and it does not replace
+the recommended Build 2 release. See the
+[candidate results](docs/nx2/vulkan-validation-findings.md#build-3-candidate-4).
 The earlier monitor-endpoint loss and shutdown hang remain open in
 [#16](https://github.com/ZenKhalil/Lichii-Orbitals/issues/16); testing on a connected
 headset does not demonstrate device-loss recovery.
