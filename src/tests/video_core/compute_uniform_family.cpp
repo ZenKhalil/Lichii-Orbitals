@@ -303,16 +303,44 @@ TEST_CASE("Fresh cold and warm mixed uniform atomic replays preserve complete me
 
 TEST_CASE("Compute uniform host policy preserves exact bounded view formats",
           "[compute_uniform_family]") {
-    std::array<bool, 6> supported;
+    std::array<bool, Vulkan::ComputeUniformFormats.size()> supported;
     supported.fill(true);
-    const std::array types{UniformTexelType::Float, UniformTexelType::Uint, UniformTexelType::Sint};
+    const std::array types{
+        UniformTexelType::Float, UniformTexelType::Uint, UniformTexelType::Sint,
+        UniformTexelType::Float, UniformTexelType::Uint, UniformTexelType::Sint,
+        UniformTexelType::Uint};
+    REQUIRE(types.size() == supported.size());
     for (size_t i = 0; i < supported.size(); ++i) {
         CHECK(Vulkan::ComputeUniformType(Vulkan::ComputeUniformFormats[i], supported) ==
-              types[i % 3]);
+              types[i]);
         auto unavailable = supported;
         unavailable[i] = false;
         CHECK_FALSE(Vulkan::ComputeUniformType(Vulkan::ComputeUniformFormats[i], unavailable));
     }
     CHECK_FALSE(Vulkan::ComputeUniformType(VK_FORMAT_R8_UNORM, supported));
     CHECK_FALSE(Vulkan::ComputeUniformType(VK_FORMAT_UNDEFINED, supported));
+    CHECK_FALSE(Vulkan::ComputeUniformType(VK_FORMAT_R16_SINT, supported));
+    CHECK_FALSE(Vulkan::ComputeUniformType(VK_FORMAT_R16_SFLOAT, supported));
+    CHECK_FALSE(Vulkan::ComputeUniformType(VK_FORMAT_R16G16_UINT, supported));
+}
+
+TEST_CASE("R16 unsigned uniform selection preserves U32 fetch and unrelated image atomic",
+          "[compute_uniform_family]") {
+    std::array<bool, Vulkan::ComputeUniformFormats.size()> supported{};
+    supported.back() = true;
+    REQUIRE(Vulkan::ComputeUniformFormats.back() == VK_FORMAT_R16_UINT);
+    const auto selected = Vulkan::ComputeUniformType(VK_FORMAT_R16_UINT, supported);
+    REQUIRE(selected == UniformTexelType::Uint);
+    CHECK_FALSE(Vulkan::ComputeUniformType(VK_FORMAT_R32_UINT, supported));
+
+    MixedInput input;
+    MixedProgram program{input};
+    REQUIRE(Vulkan::IsSingleComputeUniformFetch(program.program));
+    const auto code = program.Emit(*selected);
+    CheckFetch(code, UniformTexelType::Uint);
+    CheckAtomic(code);
+    CHECK(Ops(code, 111).empty());
+    CHECK(Ops(code, 112).empty());
+    supported.back() = false;
+    CHECK_FALSE(Vulkan::ComputeUniformType(VK_FORMAT_R16_UINT, supported));
 }

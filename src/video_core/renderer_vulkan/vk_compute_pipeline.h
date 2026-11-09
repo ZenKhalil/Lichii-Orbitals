@@ -22,6 +22,7 @@
 #include "shader_recompiler/shader_info.h"
 #include "shader_recompiler/runtime_info.h"
 #include "video_core/renderer_vulkan/pipeline_helper.h"
+#include "video_core/renderer_vulkan/typed_uniform_compute.h"
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
 #include "video_core/renderer_vulkan/vk_descriptor_buffer.h"
 #include "video_core/renderer_vulkan/vk_descriptor_pool.h"
@@ -73,7 +74,7 @@ public:
                         std::array<bool, 4> formats);
 
     void SetUniformFamily(std::array<std::unique_ptr<ComputePipeline>, 3> members,
-                          std::array<bool, 6> formats);
+                          std::array<bool, ComputeUniformFormats.size()> formats);
 
     static constexpr u64 Ocarina1440pShader = 0x6bd913e1f34e83ebULL;
     [[nodiscard]] bool CanReplaceOcarinaUpscale() const;
@@ -140,7 +141,7 @@ private:
     std::array<bool, 4> store_formats{};
     std::optional<Shader::UniformTexelType> uniform_type;
     std::array<std::unique_ptr<ComputePipeline>, 3> uniform_family;
-    std::array<bool, 6> uniform_formats{};
+    std::array<bool, ComputeUniformFormats.size()> uniform_formats{};
     u32 num_descriptor_entries{};
     boost::container::small_vector<VideoCommon::ImageViewId, 8> written_images;
     std::vector<SampledImage> sampled_images;

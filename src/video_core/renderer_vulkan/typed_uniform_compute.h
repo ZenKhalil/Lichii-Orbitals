@@ -15,13 +15,23 @@
 namespace Vulkan {
 inline constexpr std::array ComputeUniformFormats{
     VK_FORMAT_R32_SFLOAT,          VK_FORMAT_R32_UINT,          VK_FORMAT_R32_SINT,
-    VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_R32G32B32A32_UINT, VK_FORMAT_R32G32B32A32_SINT};
+    VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_R32G32B32A32_UINT, VK_FORMAT_R32G32B32A32_SINT,
+    VK_FORMAT_R16_UINT};
+
+// Numeric class is independent of component width. The prepared R16_UINT view
+// still defines a two-byte texel; its fetched unsigned component widens to U32.
+inline constexpr std::array ComputeUniformTypes{
+    Shader::UniformTexelType::Float, Shader::UniformTexelType::Uint,
+    Shader::UniformTexelType::Sint,  Shader::UniformTexelType::Float,
+    Shader::UniformTexelType::Uint,  Shader::UniformTexelType::Sint,
+    Shader::UniformTexelType::Uint};
+static_assert(ComputeUniformFormats.size() == ComputeUniformTypes.size());
 
 inline std::optional<Shader::UniformTexelType> ComputeUniformType(
     VkFormat format, const std::array<bool, ComputeUniformFormats.size()>& supported) noexcept {
     for (std::size_t i = 0; i < ComputeUniformFormats.size(); ++i) {
         if (format == ComputeUniformFormats[i] && supported[i]) {
-            return static_cast<Shader::UniformTexelType>(i % 3);
+            return ComputeUniformTypes[i];
         }
     }
     return std::nullopt;

@@ -411,7 +411,7 @@ ComputePipeline* ComputePipeline::SelectStorePipeline(VkFormat format) noexcept 
 }
 
 void ComputePipeline::SetUniformFamily(std::array<std::unique_ptr<ComputePipeline>, 3> members,
-                                     std::array<bool, 6> formats) {
+                                     std::array<bool, ComputeUniformFormats.size()> formats) {
     if (store_type || !uniform_type || !IsBuildTaskDone() || !IsBound()) {
         throw Shader::LogicError("Incomplete compute uniform family base");
     }

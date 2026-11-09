@@ -28,3 +28,24 @@ image IAdd, signed-minimum and bitwise-AND operations, including values and cana
 with zero Core+Sync validation errors. RGBA32 integer views in this fixture are
 additional emitter checks, not an expansion of the production store format policy.
 The synthetic programs do not establish eligibility of a particular game shader.
+
+## R16 unsigned uniform views
+
+Compute uniform families additionally recognize feature-supported R16_UINT views.
+The already-prepared view keeps its offset, range and two-byte texel stride; the
+unsigned member returns a U32 component through the existing raw register carrier.
+An explicit format-to-class table preserves the original six mappings and maps
+R16_UINT to Uint. R16 signed, float and multi-component formats remain unsupported.
+The graphics uniform format policy is unchanged.
+
+The actual-emitter test checks the selected U32 fetch and unchanged unrelated
+image atomic. A separate headless Vulkan case used a nonzero aligned offset,
+a 12-byte view and distinct adjacent halfwords. Exact zero-extension, missing
+integer components 0/0/1, immutable input and full allocation canaries passed,
+with zero Core+Sync validation errors. A 142-check actual-method queue projection
+covered both payload modes and value-captured R16/other-format ordering; it is not
+an execution of the renderer's Device, Configure or retirement machinery.
+
+Vulkan references: [uniform texel descriptors](https://docs.vulkan.org/spec/latest/chapters/descriptors.html),
+[R16 format definition](https://docs.vulkan.org/spec/latest/chapters/formats.html),
+and [image-read conversion](https://docs.vulkan.org/spec/latest/chapters/images.html).
