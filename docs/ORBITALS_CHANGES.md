@@ -1,8 +1,8 @@
 # Orbitals change notes
 
-## Unreleased viewport dependency correction
+## Build 2 — viewport dependency correction
 
-The development source now marks Vulkan viewport state dirty when `depth_mode`
+Build 2 marks Vulkan viewport state dirty when `depth_mode`
 changes. That register affects `minDepth`, so a mode-only update must refresh the
 existing dynamic viewport even when transform and rectangle registers stay the
 same. The correction adds one dependency-table entry; it does not change shader
@@ -12,8 +12,10 @@ Four tests call the complete production table builder and actual state-tracker
 consumption paths. With only the test seam added, the missing depth dependency
 failed while the other three cases passed (342 of 343 assertions passed). Adding
 only the mapping made all four cases and 343 assertions pass. The combined
-regression run passed 115 cases and 51,826,450 assertions. These are source-test
-results, not validation of a future numbered binary.
+development regression run passed 115 cases and 51,826,450 assertions. The
+separately identified numbered binary passed 115 cases and 51,826,174 assertions.
+Its own opening, gameplay and audio checks are recorded in
+[build history](BUILD_HISTORY.md).
 
 The optional viewport observer remains off by default. A baseline observation
 through menus, opening cutscene, co-op room, camera rotation and movement logged
@@ -21,15 +23,17 @@ no same-channel depth-mode changes or stale-depth mismatches. That run did not
 exercise this defect and does not connect the correction to the reported
 left-view jitter, glare or static lines. No FPS improvement is claimed.
 
-Build 1 remains the latest recommended numbered baseline until a separately
-identified candidate passes its own runtime checks. The release and its assets
-are unchanged.
+Build 2 is the latest recommended numbered release for the verified dependency
+correction and retained startup/audio behavior. It measured 25.40 / 25.35 FPS in
+the initial room, below the 30 FPS target. The unreleased Build 3 candidate's
+[validation findings](nx2/vulkan-validation-findings.md#build-3-candidate-1)
+are tracked separately; no artifact cure or performance gain is claimed.
 
 ## Build 1
 
 [Build 1](https://github.com/ZenKhalil/Lichii-Orbitals/releases/tag/build-1) was
-published as a pre-release on 2026-11-09. It is the latest and recommended numbered
-baseline. Its source remains pinned to
+published as a pre-release on 2026-11-09. It is the previous numbered baseline.
+Its source remains pinned to
 [`e28cbb16`](https://github.com/ZenKhalil/Lichii-Orbitals/commit/e28cbb16fd4d0fc4103345b79172e8d97d1e97e6);
 later documentation updates do not change that binary. See
 [build history](BUILD_HISTORY.md) for the numbered executable's exact check scope.
