@@ -70,3 +70,24 @@ metadata. Disabled diagnostics still have small object/Scope field overhead.
 Five trace cases passed with the environment both absent and enabled; tests cover
 immutable row copies, stage identity, disabled/unknown transport and existing
 bounded budgets. They do not execute the real logger or driver construction path.
+
+## Streamline requirements trace
+
+`EDEN_NX2_STREAMLINE_REQUIREMENTS=1` logs already-returned DLSS Vulkan requirements
+at startup, without changing feature negotiation or making additional SDK/device
+calls. It is disabled by default, limited to four records per process, 16 names
+per list and 96 bytes per name, and catches logging/allocation exceptions. Normal
+compilation and a later explicit-flag startup observation are its validation gates;
+no extra standalone test harness was introduced.
+
+## Combined validation and remaining scope
+
+The integrated source passed 161 regression cases and 95 compiler/cache cases,
+including the existing replay, typed-store and uniform-emitter coverage. The
+recorded pre-package run had 51,911,387 and 448,211 assertions respectively;
+contention assertion totals can vary. No elapsed-time threshold is a performance
+claim. All GPU fixtures are synthetic compute programs. Actual graphics draws,
+application Configure selection, failure-injected construction and queued
+retirement still require appropriately scoped runtime evidence. A fresh bounded
+application VVL run must correlate the actual pipeline/view/descriptor; category
+caps and absent records are coverage limits, not proof of no remaining errors.

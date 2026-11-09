@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdlib>
 #include <filesystem>
 #include <optional>
@@ -60,6 +61,71 @@ int LogLevel() {
     const char* const value = std::getenv("EDEN_NX2_DLSS_LOG");
     return value ? std::atoi(value) : 0;
 }
+
+// Startup-only diagnostics; no feature negotiation or additional Streamline calls.
+void LogFeatureRequirements(const sl::FeatureRequirements& requirements) noexcept {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_STREAMLINE_REQUIREMENTS");
+        return value && value[0] == '1' && value[1] == '\0';
+    }();
+    if (!enabled) {
+        return;
+    }
+    static std::atomic<u32> records{};
+    u32 ticket = records.load(std::memory_order_relaxed);
+    if (ticket >= 4 || !records.compare_exchange_strong(ticket, ticket + 1,
+                                                       std::memory_order_relaxed)) {
+        return;
+    }
+    try {
+        constexpr u32 max_names = 16;
+        constexpr size_t max_name_bytes = 96;
+        const auto names = [&](u32 count, const char* const* values) {
+            std::string result;
+            if (count != 0 && values == nullptr) {
+                return std::string{"[missing-array]"};
+            }
+            for (u32 index = 0; index < std::min(count, max_names); ++index) {
+                if (index != 0) {
+                    result += ',';
+                }
+                if (values[index] == nullptr) {
+                    result += "[null]";
+                    continue;
+                }
+                size_t length{};
+                while (length < max_name_bytes && values[index][length] != '\0') {
+                    const unsigned char ch = static_cast<unsigned char>(values[index][length]);
+                    result += ch >= 32 && ch < 127 ? static_cast<char>(ch) : '?';
+                    ++length;
+                }
+                if (length == max_name_bytes) {
+                    result += "[truncated]";
+                }
+            }
+            return result;
+        };
+        LOG_INFO(Render_Vulkan,
+                 "Streamline requirements record={} feature=DLSS "
+                 "vk12_count={} vk12_names=[{}] vk12_omitted={} "
+                 "vk13_count={} vk13_names=[{}] vk13_omitted={} "
+                 "compute_queues={} graphics_queues={} optical_flow_queues={}",
+                 ticket + 1, requirements.vkNumFeatures12,
+                 names(requirements.vkNumFeatures12, requirements.vkFeatures12),
+                 requirements.vkNumFeatures12 > max_names
+                     ? requirements.vkNumFeatures12 - max_names : 0,
+                 requirements.vkNumFeatures13,
+                 names(requirements.vkNumFeatures13, requirements.vkFeatures13),
+                 requirements.vkNumFeatures13 > max_names
+                     ? requirements.vkNumFeatures13 - max_names : 0,
+                 requirements.vkNumComputeQueuesRequired,
+                 requirements.vkNumGraphicsQueuesRequired,
+                 requirements.vkNumOpticalFlowQueuesRequired);
+    } catch (...) {
+        // Diagnostic allocation/logging must not change startup or its original result.
+    }
+}
+
 
 void LogFromStreamline(sl::LogType type, const char* message) {
     std::string_view text{message ? message : ""};
@@ -364,6 +430,7 @@ bool Start() {
         api.shutdown();
         return false;
     }
+    LogFeatureRequirements(requirements);
     if (requirements.vkNumComputeQueuesRequired != 0 ||
         requirements.vkNumGraphicsQueuesRequired != 0) {
         LOG_WARNING(Render_Vulkan, "This DLSS wants extra Vulkan queues; using FSR 3.1");
