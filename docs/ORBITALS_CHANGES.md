@@ -1,9 +1,13 @@
 # Orbitals change notes
 
-## Build 1 candidate
+## Build 1
 
-The numbered release is being prepared. This evidence describes the accepted
-source candidate; the final numbered executable still requires its own checks.
+[Build 1](https://github.com/ZenKhalil/Lichii-Orbitals/releases/tag/build-1) was
+published as a pre-release on 2026-11-09. It is the latest and recommended numbered
+baseline. Its source remains pinned to
+[`e28cbb16`](https://github.com/ZenKhalil/Lichii-Orbitals/commit/e28cbb16fd4d0fc4103345b79172e8d97d1e97e6);
+later documentation updates do not change that binary. See
+[build history](BUILD_HISTORY.md) for the numbered executable's exact check scope.
 
 The pinned source already contains the frame-timestamp, geometry-shader and
 texture-offset changes associated with
@@ -38,21 +42,22 @@ Local changes and reviewed ports include:
 
 ## Validation and remaining limits
 
-The latest candidate passed **111 targeted cases and 51,826,471 assertions**.
+The numbered binary passed **111 targeted cases and 51,822,609 assertions**.
 The output-flag regression failed in the baseline and passed after correction.
 
-On an Intel Core i7-12700F / NVIDIA RTX 3080 system, the opening played naturally
-at **30.025 and 30.003 FPS** in measured cutscene windows. The fixed two-player
-room measured **24.332 and 24.066 FPS**. Six-channel output attached and remained
-healthy; one measured room interval had approximately 14 ms of padding. Across
-the full audio counter interval, padding totaled approximately 423 ms over
-770 seconds. Geometry appeared intact during the recorded checks and shutdown
-completed. A subsequent user report describes left-view-only jittering objects,
-glare and static lines in the waiting room, with the right view unaffected.
-That visual-correctness issue is unresolved and has not been causally isolated.
-The run used 1x resolution and the
-accepted PAUSE selection. These results do not isolate the latest audio fix's
-performance effect.
+On the Core i7-12700F / RTX 3080 test system, Build 1 measured **30.04 FPS** in
+a 20-second opening cutscene window and **25.15 / 25.24 FPS** in 30- and 20-second
+initial-room windows at 1× resolution. The stereo run reached co-op gameplay and
+exited normally. A separate 143-second six-channel run reached the title and
+Play Local menu and exited normally; it included no gameplay or FPS measurement.
+Audio padding totaled approximately 396 ms in the stereo run and 57 ms in that
+six-channel smoke. No host audio fault or new native shader rejection was logged.
+
+The preceding candidate, a different executable, played the full opening with
+six-channel output. Its audio counters recorded approximately 423 ms of padding
+over 770 seconds, including about 14 ms in one measured room interval. That
+coverage is retained as prior-candidate evidence, not attributed to the numbered
+binary's shorter six-channel check.
 
 Earlier controlled comparisons supported the unlock change and PAUSE selection.
 Cache-line alignment and half-resolution candidates did not improve the room
@@ -64,6 +69,12 @@ unverified. Brief loading/streaming stalls and audio underfills can occur.
 Known startup diagnostics include three disk-cache compute replay failures and
 a source-depth assertion burst. Those messages alone do not establish skipped
 live workloads or missing geometry in the current run.
+
+Open issues remain: [left-view artifacts (#1)](https://github.com/ZenKhalil/Lichii-Orbitals/issues/1),
+[room performance (#2)](https://github.com/ZenKhalil/Lichii-Orbitals/issues/2) and
+[viewport depth invalidation (#3)](https://github.com/ZenKhalil/Lichii-Orbitals/issues/3).
+The viewport dependency defect is demonstrated in source but is **not fixed in
+Build 1**; its relationship to the reported jitter/glare/static lines is unproven.
 
 Future source changes receive new commits. Executable releases use new build
 numbers; latest and recommended remain separate with their validation rationale.

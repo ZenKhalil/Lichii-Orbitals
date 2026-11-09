@@ -15,13 +15,14 @@ It is independent of those projects and is not affiliated with Nintendo.
 
 | Build | Status | Recommendation |
 |---|---|---|
-| Build 1 | Preparing the numbered release and its corresponding source | Pending the final numbered-binary checks |
+| [Build 1](https://github.com/ZenKhalil/Lichii-Orbitals/releases/tag/build-1) | Pre-release · Latest · Recommended | Validated startup/audio fixes and the tested memory/monitor corrections; rendering and performance issues remain open |
 
-[Releases](https://github.com/ZenKhalil/Lichii-Orbitals/releases) contain numbered
-Windows builds when available. Each release records its source commit, checksums,
-test results and known limitations. **Latest** identifies the newest published
-build; **recommended** identifies the tested choice and explains why. A newer
-diagnostic build does not automatically replace the recommended build.
+[Download Build 1 for Windows x64](https://github.com/ZenKhalil/Lichii-Orbitals/releases/download/build-1/Lichii-Orbitals-build-1-windows-x86_64.zip).
+The [release](https://github.com/ZenKhalil/Lichii-Orbitals/releases/tag/build-1)
+also includes application source, dependency source and checksums.
+[Build history](docs/BUILD_HISTORY.md) records each numbered binary's validation.
+**Latest** identifies the newest published build; **recommended** identifies
+the tested choice. A newer diagnostic build does not automatically replace it.
 
 Extract the complete Windows archive and run `lichii.exe`. Existing Eden data
 directories remain in use; no save migration is required. Games, keys, firmware,
@@ -29,21 +30,28 @@ saves and shader caches are not included. Use your own lawfully obtained files.
 
 ## Current scope
 
-The release candidate passes the original logo freeze and reaches local co-op
+Build 1 passes the original logo freeze and reaches local co-op
 gameplay. It includes repairs for audio-ring purging, timing after pauses,
 GPU query completion, shader-source memory coherency and surround stream
 creation. Reviewed monitor-lock changes improve the tested room's performance.
 See [change notes](docs/ORBITALS_CHANGES.md) for the evidence and limitations.
 
-The latest candidate played the opening naturally at approximately 30 FPS and
-measured approximately 24 FPS in the fixed two-player room on the test machine.
-Those are different scenes, not a guarantee of 30 FPS throughout. Later chapters,
-all graphics paths and all audio devices have not been validated. A reported
-left-view-only problem includes jittering objects, glare and static lines in
-the waiting room; its cause remains under investigation. Brief audio underfills
-can still occur around loading and movement. Any recommendation over older
-local builds is for the validated startup/audio fixes, not complete rendering
-correctness or a guaranteed frame rate.
+The numbered binary measured **30.04 FPS** in an opening cutscene window and
+**25.15 / 25.24 FPS** in two initial two-player room windows on the test machine.
+Stereo gameplay and a separate six-channel startup/menu check passed. Full-opening
+six-channel playback was checked on the preceding candidate, not repeated on
+Build 1. These checks do not establish stable 30 FPS throughout or complete
+rendering correctness. Brief audio underfills and loading/streaming stalls remain.
+
+Known issues still present in Build 1:
+
+- [Left-view jitter, glare and static lines (#1)](https://github.com/ZenKhalil/Lichii-Orbitals/issues/1): reported intermittently; cause unconfirmed.
+- [Initial-room performance below 30 FPS (#2)](https://github.com/ZenKhalil/Lichii-Orbitals/issues/2).
+- [Stale viewport depth after a depth-mode-only update (#3)](https://github.com/ZenKhalil/Lichii-Orbitals/issues/3): demonstrated source defect; its connection to the reported left-view artifacts is unconfirmed.
+
+Build 1 is recommended over the earlier local candidates for its validated
+startup/audio fixes and measured monitor baseline. Later chapters, all graphics
+paths and all audio devices have not been validated.
 
 ## Reporting issues
 
