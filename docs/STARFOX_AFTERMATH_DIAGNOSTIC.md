@@ -19,26 +19,14 @@ An unauthenticated download succeeded on 2026-11-04.
 | Official SDK ZIP | `e38136a60110199559b7365d3ea4ec0cb5588dc2b0f593877d864e0299659a3f` |
 | `lib/x64/GFSDK_Aftermath_Lib.x64.dll` | `e119d214ecbc8abbbe9f3dc4990a77b999e4fd268071e0a1145c25e487cc0dd7` |
 
-No SDK or DLL was found in the checked `C:/lx`, NVIDIA installation, or
-existing diagnostic-package locations. Use a separate build directory to
-avoid leaving Aftermath enabled in the ordinary build's CMake cache. In a
-builder-owned job with the source pinned to this branch, retain the flags
-from `C:/lx/configure.sh`, change its `-B` directory to
-`C:/lx/build-aftermath`, and add `-DENABLE_NSIGHT_AFTERMATH:BOOL=ON`.
-Set this process-local environment variable before configuring:
-
-```sh
-export NSIGHT_AFTERMATH_SDK='C:/lx/deps/nsight-aftermath-2026.3.0'
-sed \
-  -e 's@-B C:/lx/build @-B C:/lx/build-aftermath @' \
-  -e 's@-DCMAKE_BUILD_TYPE=RelWithDebInfo@-DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_NSIGHT_AFTERMATH:BOOL=ON@' \
-  C:/lx/configure.sh > C:/lx/configure-aftermath.sh
-bash C:/lx/configure-aftermath.sh
-cmake --build C:/lx/build-aftermath --parallel 12
-```
+Use a separate build directory to keep Aftermath out of the ordinary build's
+CMake cache. Reuse the normal toolchain/dependency options and add
+`-DENABLE_NSIGHT_AFTERMATH:BOOL=ON`. Set `NSIGHT_AFTERMATH_SDK` to the extracted
+SDK directory for this process, then configure and build `build-aftermath`.
+Do not commit the SDK, proprietary DLL or captured game data into the source tree.
 
 That directory must contain `include/GFSDK_Aftermath_GpuCrashDump.h`. Build
-with `cmake --build C:/lx/build-aftermath --parallel 12`. Verify that the
+with `cmake --build build-aftermath --parallel 12`. Verify that the
 tracker's compiler command contains `HAS_NSIGHT_AFTERMATH` and the SDK
 include directory. The enabled tracker was syntax-checked against these
 real SDK headers on Linux; a Windows build and runtime check are still

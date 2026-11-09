@@ -99,8 +99,8 @@ invocations across eight workgroups. These are synthetic fixtures, not execution
 of the nine rejected game shaders or a Windows/NVIDIA run.
 
 Build, test, benchmark and Vulkan records are under
-`~/.capy/work/dkb/integration/merged-*`. The source tests are committed; the Vulkan
-test program is recorded under `~/.capy/work/bananza-compute-tests`.
+`<private upstream investigation artifact>`. The source tests are committed; the Vulkan
+test program is recorded under `<private upstream investigation artifact>`.
 
 ## Check the Windows result
 

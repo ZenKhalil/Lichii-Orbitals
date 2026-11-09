@@ -1,11 +1,16 @@
 # Contributing
 
-Lichii is developed in this fork. Open issues and pull requests on
-[zortos293/eglantine](https://github.com/zortos293/eglantine).
+Open issues and pull requests at
+[ZenKhalil/Lichii-Orbitals](https://github.com/ZenKhalil/Lichii-Orbitals).
 
-See the [build guide](docs/Build.md) for your platform and the
-[coding guidelines](docs/Coding.md) for technical guidance. Keep changes focused,
-describe what you tested, and distinguish build checks from gameplay testing.
+Read the [build notes](docs/ORBITALS_BUILD.md) and
+[coding guidelines](docs/Coding.md). Describe the concrete failure, resulting
+behavior, source of any upstream fix and relevant validation. Keep tests with
+their fix and keep unrelated formatting changes separate.
 
-Original copyright notices and third-party licenses remain in effect. See
-[LICENSE.txt](LICENSE.txt) for the project's license.
+For performance changes, report a controlled comparison in the same scene and
+settings. Distinguish measured results from hypotheses. For rendering changes,
+verify correctness rather than treating fewer submitted draws as an improvement.
+
+Never include game files, executable captures, keys, firmware, saves or private
+logs in a contribution. Preserve copyright notices and dependency licenses.

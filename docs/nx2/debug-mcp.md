@@ -398,36 +398,26 @@ NCE CPU state, or the GPU caches, and Eden and yuzu never had it. The `saveState
 not a tool. The practical substitute is a reproduction script: phase 2 input sequences, recorded
 once (`EDEN_NX2_KEY_RECORD` already records keys in `eden-cli`) and replayed after boot.
 
-## Running it on the PC
+## Running a local diagnostic session
 
-1. Build the branch as usual:
-   `bash C:/lx/build-fix.sh feat/debug-mcp debug-mcp "Any - debug server" "EDEN_NX2_DEBUG_SERVER=127.0.0.1:6545"`.
-   Optionally add `EDEN_NX2_DEBUG_DIR=C:/Users/Zortos/.capy/work/lichii-debug/debug-mcp/dumps`
-   so dumps land next to the build.
-2. The owner launches the game from the shortcut. The log shows
-   `Debug server listening on 127.0.0.1:6545, dump dir ...`.
-3. The agent runs the adapter with native Windows Python. The MSYS `python` in Git Bash rejects
-   `C:/` paths, so call the Windows interpreter by its full path. From bash, `--call` runs one
-   request, prints its JSON result, and saves any PNG to `--out`:
+Build with the usual settings. For a diagnostic launch only, set
+`EDEN_NX2_DEBUG_SERVER=127.0.0.1:6545` in that launcher's environment. An optional
+`EDEN_NX2_DEBUG_DIR` selects a private output directory. Keep the server disabled
+for normal play, and never expose it on an external interface.
 
-   ```
-   PY=/c/Users/Zortos/AppData/Local/Programs/Python/Python314/python.exe
-   $PY -I C:/lx/src/tools/nx2/debug_mcp.py --server 127.0.0.1:6545 --call '{"method":"status"}'
-   $PY -I C:/lx/src/tools/nx2/debug_mcp.py --server 127.0.0.1:6545 \
-       --call '{"method":"screenshot","params":{"height":1080}}' --out C:/lx/shot.png
-   $PY -I C:/lx/src/tools/nx2/debug_mcp.py --server 127.0.0.1:6545 \
-       --call '{"method":"reject_shaders","params":{"hashes":["3ddfb1d7621c4755"]}}'
-   $PY -I C:/lx/src/tools/nx2/debug_mcp.py --server 127.0.0.1:6545 \
-       --call '{"method":"input_sequence","params":{"steps":[{"right_stick":[1,0],"frames":60},{"frames":30}]}}'
-   ```
+The log confirms `Debug server listening on 127.0.0.1:6545`. From the source root,
+use native Windows Python for one request at a time:
 
-   The request is `{"method": <tool>, "params": {...}}`, the same format the socket uses. Adapter-only
-   tools work too (`capture_image`, and `index` on `capture_frame`). On failure, `--call` prints
-   `{"error": ...}` and exits with status 1. Without `--call`, the script is a stdio MCP server for
-   an MCP client.
+```powershell
+python -I tools/nx2/debug_mcp.py --server 127.0.0.1:6545 --call '{"method":"status"}'
+python -I tools/nx2/debug_mcp.py --server 127.0.0.1:6545 --call '{"method":"screenshot","params":{"height":1080}}' --out screenshot.png
+```
 
-   Hashes must be all 16 hex digits. A shorter hash is refused rather than zero-padded, because a
-   padded hash matches nothing. Returned paths use forward slashes.
+The request is `{"method": <tool>, "params": {...}}`. On failure, `--call`
+prints an error and exits nonzero. Without `--call`, the adapter runs as a stdio
+MCP server. Confirm the intended process/build before collecting evidence.
+Keep captures private: they can contain game code and assets. Hash-based
+experiments require full 16-digit hashes and must be restored after testing.
 
 The adapter reconnects after the game restarts. A boot through a guest relaunch stops and starts
 the server again on the same port.

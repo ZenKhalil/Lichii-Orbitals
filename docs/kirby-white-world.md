@@ -225,7 +225,7 @@ back one whole frame inside the emulator. No capture tool is needed.
 Example for the character select screen:
 
 ```
-EDEN_NX2_FRAME_DUMP=C:\lx\dump EDEN_NX2_FRAME_DUMP_AT=45
+EDEN_NX2_FRAME_DUMP=C:/path/to/private-dumps EDEN_NX2_FRAME_DUMP_AT=45
 ```
 
 Open character select, then wait past the trigger time. The log shows `Frame dump: capturing frame

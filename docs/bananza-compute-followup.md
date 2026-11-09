@@ -2,7 +2,7 @@
 
 The live trace proves that compute shaders reach an unimplemented SPIR-V emitter. It does not identify the IR opcode, and it does not prove that these failures cause the reported frame cadence. This change preserves the missing diagnostic context; it does not enable an unverified shader operation.
 
-The investigation uses `~/.capy/work/dkb/dkb-frame-trace-live.txt` and source base `8644f32`, after the upstream merge and the first Bananza diagnostic build. No game was run during this investigation.
+The investigation uses `<private upstream investigation artifact>` and source base `8644f32`, after the upstream merge and the first Bananza diagnostic build. No game was run during this investigation.
 
 ## What the log establishes
 

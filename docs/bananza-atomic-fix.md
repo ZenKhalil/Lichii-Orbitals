@@ -6,7 +6,7 @@ This fixes the established compiler gap. It does not establish that Bananza's bl
 
 ## Evidence and provenance
 
-The source baseline is `ba2d291`, and the owner log is `~/.capy/work/dkb/profile-run.txt`. All nine distinct shader hashes with a compilation failure identify `GlobalAtomicIAdd32`:
+The source baseline is `ba2d291`, and the owner log is `<private upstream investigation artifact>`. All nine distinct shader hashes with a compilation failure identify `GlobalAtomicIAdd32`:
 
 ```text
 ceafb5fe9c1f007b  f92e1c9a711e8b7e  c7a1778ec38f628
@@ -76,7 +76,7 @@ The same emitted modules were executed on Mesa llvmpipe, LLVM 20.1.2, through Vu
 
 The synthetic guest bases have different high words, `0x12fffffff8` and `0x1300002000`. The first also has alignment padding, so the tests exercise 64-bit selection and correct rebasing rather than only zero-based offsets.
 
-The Vulkan harness reuses the committed IR fixture. Its source, build script, emitted modules, and logs are under `~/.capy/work/bananza-compute-tests`, with `atomic-runtime.cpp`, `build-atomic-runtime.py`, `modules/`, and `runtime.log`. This is isolated compiler/GPU verification, not a Bananza gameplay run or an NVIDIA hardware test. The owner must still test the integrated build; other shader gaps or addresses outside the available descriptors can remain.
+The Vulkan harness reuses the committed IR fixture. Its source, build script, emitted modules, and logs are under `<private upstream investigation artifact>`, with `atomic-runtime.cpp`, `build-atomic-runtime.py`, `modules/`, and `runtime.log`. This is isolated compiler/GPU verification, not a Bananza gameplay run or an NVIDIA hardware test. The owner must still test the integrated build; other shader gaps or addresses outside the available descriptors can remain.
 
 ### Integrated release-build verification
 
@@ -86,6 +86,6 @@ A fresh emit-context object compiled with the exact integrated `-O2` flags, subs
 
 The rebuilt integration tree, which also contained pending descriptor and pacing changes, passed **500 test cases and 15,791,309 assertions**. Its focused atomic filter passed **four cases and 13,718 assertions**, including all no-route cases.
 
-Finally, the Vulkan harness was relinked against the actual rebuilt `build/src/shader_recompiler/libshader_recompiler.a`, with no isolated backend object overrides. Its six emitted modules passed SPIR-V validation, and all six native/NVN contention, overflow, and unmatched-address scenarios passed again. These final-library logs and modules are under `~/.capy/work/bananza-release-check`.
+Finally, the Vulkan harness was relinked against the actual rebuilt `build/src/shader_recompiler/libshader_recompiler.a`, with no isolated backend object overrides. Its six emitted modules passed SPIR-V validation, and all six native/NVN contention, overflow, and unmatched-address scenarios passed again. These final-library logs and modules are under `<private upstream investigation artifact>`.
 
-For the standalone atomic commit, the pending descriptor and pacing changes were saved separately. Both `yuzu-cmd` and `tests` were rebuilt with Clang 20 and Ninja using all eight available cores. That atomic-only tree passed **490 cases and 15,766,625 assertions**, plus the same four focused atomic cases. Its build and test logs are under `~/.capy/work/dkb/integration/atomic-only-*`. No game was run.
+For the standalone atomic commit, the pending descriptor and pacing changes were saved separately. Both `yuzu-cmd` and `tests` were rebuilt with Clang 20 and Ninja using all eight available cores. That atomic-only tree passed **490 cases and 15,766,625 assertions**, plus the same four focused atomic cases. Its build and test logs are under `<private upstream investigation artifact>`. No game was run.

@@ -11,7 +11,7 @@ a hot path or prove an FPS improvement. Bulk-porting these PRs is not justified.
 This audit compares fetched refs against `fix/bananza-frame-diagnostics` at
 `8644f32fba441c3d703384a9bc56bed0c35346bd`, after upstream merge `3483630`.
 Evidence is the supplied `dkb-frame-trace-live.txt`, stored locally under
-`~/.capy/work/dkb/`. From 110 seconds onward, 26 GPU samples have median span
+`<private upstream investigation artifact>`. From 110 seconds onward, 26 GPU samples have median span
 41.812 ms, submission sum 5.831 ms, and 91 submissions per frame. Draw summaries
 show roughly 5,300 attempts per frame. There are no Nx2Profile zone reports.
 The timestamp difference is not a measurement of CPU busy time.
