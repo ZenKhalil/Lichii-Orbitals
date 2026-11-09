@@ -38,17 +38,21 @@ TEST_CASE("Texel metadata trace has exact opt-in and bounded independent budgets
     CHECK_FALSE(Mismatch(Numeric::Uint, Numeric::Uint));
 
     Budget local;
-    for (const auto kind : {Kind::Uniform, Kind::Storage}) {
-        for (const bool mismatch : {false, true}) {
-            Row row = MakeRow(kind);
-            row.mismatch = mismatch;
-            const auto limit = mismatch ? Budget::MismatchLimit : Budget::ControlLimit;
-            for (std::uint32_t i = 0; i < limit; ++i) {
-                REQUIRE(local.Reserve(row));
-                CHECK(row.ticket == i + 1);
-                CHECK(row.limit == limit);
+    // Consume compute first: graphics must retain both kinds and both quota classes.
+    for (const auto stage : {5U, 0U}) {
+        for (const auto kind : {Kind::Uniform, Kind::Storage}) {
+            for (const bool mismatch : {false, true}) {
+                Row row = MakeRow(kind);
+                row.stage = stage;
+                row.mismatch = mismatch;
+                const auto limit = mismatch ? Budget::MismatchLimit : Budget::ControlLimit;
+                for (std::uint32_t i = 0; i < limit; ++i) {
+                    REQUIRE(local.Reserve(row));
+                    CHECK(row.ticket == i + 1);
+                    CHECK(row.limit == limit);
+                }
+                CHECK_FALSE(local.Reserve(row));
             }
-            CHECK_FALSE(local.Reserve(row));
         }
     }
     CHECK_FALSE(local.Available());
@@ -127,15 +131,24 @@ TEST_CASE("Texel metadata capture owns immutable bounded rows and restores neste
 TEST_CASE("Texel metadata global quotas do not overgrant across capture threads",
           "[video_core][texel_type_trace]") {
     Budget local;
-    std::atomic<unsigned> granted{};
+    std::array<std::atomic<unsigned>, 8> granted{};
     std::array<std::thread, 8> workers;
     for (auto& worker : workers) {
         worker = std::thread([&] {
-            Row row = MakeRow(Kind::Storage);
-            row.mismatch = true;
-            for (unsigned i = 0; i < 32; ++i) {
-                if (local.Reserve(row)) {
-                    ++granted;
+            std::size_t bucket{};
+            for (const auto stage : {5U, 0U}) {
+                for (const auto kind : {Kind::Uniform, Kind::Storage}) {
+                    for (const bool mismatch : {false, true}) {
+                        Row row = MakeRow(kind);
+                        row.stage = stage;
+                        row.mismatch = mismatch;
+                        for (unsigned i = 0; i < 32; ++i) {
+                            if (local.Reserve(row)) {
+                                ++granted[bucket];
+                            }
+                        }
+                        ++bucket;
+                    }
                 }
             }
         });
@@ -143,8 +156,11 @@ TEST_CASE("Texel metadata global quotas do not overgrant across capture threads"
     for (auto& worker : workers) {
         worker.join();
     }
-    CHECK(granted.load() == Budget::MismatchLimit);
-    CHECK(local.counts[1].load() == 0);
+    for (std::size_t bucket = 0; bucket < granted.size(); ++bucket) {
+        CHECK(granted[bucket].load() ==
+              (bucket % 2 ? Budget::MismatchLimit : Budget::ControlLimit));
+    }
+    CHECK_FALSE(local.Available());
 }
 
 TEST_CASE("Texel metadata follows actual declaration and payload indexing",
@@ -220,4 +236,57 @@ TEST_CASE("Texel metadata follows actual declaration and payload indexing",
     CHECK_FALSE(second.written);
     CHECK(batch->rows[2].handle_source == HandleSource::Computed);
     CHECK_FALSE(batch->rows[2].mismatch);
+
+    // Reproduce the coverage loss: repeated compute uniform mismatches exhaust
+    // their quota before a later graphics pipeline reaches its first mismatch.
+    // Use the actual capture adapter and bounded Scope batches, not raw counters.
+    Budget families;
+    Shader::Info uniform_info;
+    Shader::TextureBufferDescriptor uniform{};
+    uniform.count = 1;
+    const Offsets uniform_offsets{.binding = 11, .entry = 25};
+    const Identity compute{.hash = 43, .program_address = 200, .stage = 5, .native = true};
+    for (std::uint32_t start = 0; start < Budget::MismatchLimit; start += Batch::RowLimit) {
+        Scope compute_scope{&queue, true, true, families};
+        for (std::size_t i = 0; i < Batch::RowLimit; ++i) {
+            Capture(compute_scope, uniform_info, compute, uniform_offsets, uniform, 0, 96, 3,
+                    PixelFormat::R32_UINT, PixelFormat::R32_UINT, 8192, 512, 0);
+        }
+        const auto compute_batch = Scope::SealCurrent();
+        REQUIRE(compute_batch);
+        REQUIRE(compute_batch->size == Batch::RowLimit);
+        for (std::size_t i = 0; i < compute_batch->size; ++i) {
+            CHECK(compute_batch->rows[i].stage == 5);
+            CHECK(compute_batch->rows[i].ticket == start + i + 1);
+        }
+    }
+    {
+        Scope exhausted_compute{&queue, true, true, families};
+        Capture(exhausted_compute, uniform_info, compute, uniform_offsets, uniform, 0, 96, 3,
+                PixelFormat::R32_UINT, PixelFormat::R32_UINT, 8192, 512, 0);
+        CHECK_FALSE(Scope::SealCurrent());
+    }
+    {
+        Scope graphics_scope{&queue, true, true, families};
+        for (std::uint32_t stage = 0; stage < 5; ++stage) {
+            const Identity graphics{.hash = 44, .program_address = 300,
+                                    .stage = stage, .native = true};
+            Capture(graphics_scope, uniform_info, graphics, uniform_offsets, uniform, 0, 96, 3,
+                    PixelFormat::R32_UINT, PixelFormat::R32_UINT, 8192, 512, 0);
+        }
+        Scope::Host(&queue, 25, 123, 256, 1024, 98);
+        const auto graphics_batch = Scope::SealCurrent();
+        REQUIRE(graphics_batch);
+        REQUIRE(graphics_batch->size == 5);
+        for (std::size_t i = 0; i < graphics_batch->size; ++i) {
+            const auto& row = graphics_batch->rows[i];
+            CHECK(row.stage == i);
+            CHECK(row.kind == Kind::Uniform);
+            CHECK(row.mismatch);
+            CHECK(row.ticket == i + 1); // All graphics stages share one family quota.
+            CHECK(row.limit == Budget::MismatchLimit);
+            CHECK(row.host_observed);
+            CHECK(row.buffer_view == 123);
+        }
+    }
 }
