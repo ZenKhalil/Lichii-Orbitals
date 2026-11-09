@@ -38,6 +38,7 @@
 #include "video_core/engines/kepler_compute.h"
 #include "video_core/memory_manager.h"
 #include "video_core/nx2_debug_control.h"
+#include "video_core/native_shader_source.h"
 #include "video_core/shader_environment.h"
 #include "video_core/texture_cache/format_lookup_table.h"
 #include "video_core/textures/texture.h"
@@ -506,6 +507,9 @@ public:
         return true;
     }
 
+    // Includes bytes prefetched past the terminating instruction in the last page.
+    GPUVAddr ReadEnd() const noexcept { return page_end; }
+
 private:
     bool Holds(GPUVAddr address) const {
         return address >= page_begin && address + sizeof(Instruction) <= page_end;
@@ -562,6 +566,21 @@ std::shared_ptr<const LoweredNativeCode> GenericEnvironment::LowerNativeCode(u32
     std::vector<Instruction> native;
     Shader::Ampere::ProgramCaptureState capture;
     NativeInstructionReader reader{*gpu_memory};
+    const auto source_error = [&](std::string message) {
+        const GPUVAddr native_begin = program_base + native_header_size;
+        const GPUVAddr native_end = std::max(reader.ReadEnd(),
+                                            native_begin + native.size() * sizeof(Instruction));
+        const std::array sources{
+            std::pair<GPUVAddr, size_t>{program_base + start_address,
+                                       native_header_size != 0 ? sizeof(sph) : 0},
+            std::pair<GPUVAddr, size_t>{native_begin, native_end - native_begin},
+        };
+        return NativeShaderSourceError{
+            Shader::Exception{std::move(message)},
+            NativeShaderSourcePages(sources, [&](GPUVAddr page) {
+                return gpu_memory->GpuToCpuAddress(page);
+            })};
+    };
     for (u32 index = 0; index < maximum_instructions; ++index) {
         const GPUVAddr address = program_base + native_header_size + index * sizeof(Instruction);
         Instruction instruction;
@@ -572,7 +591,7 @@ std::shared_ptr<const LoweredNativeCode> GenericEnvironment::LowerNativeCode(u32
                 // can't tell); stop at the mapping's end and let the lowering judge what was
                 // captured.
                 if (!native.empty()) break;
-                throw Shader::RuntimeError("Unmapped native shader instruction at {:#x}", address);
+                throw source_error(fmt::format("Unmapped native shader instruction at {:#x}", address));
             }
             gpu_memory->ReadBlock(address, &instruction, sizeof(instruction));
         }
@@ -586,10 +605,10 @@ std::shared_ptr<const LoweredNativeCode> GenericEnvironment::LowerNativeCode(u32
                     std::fclose(file);
                 }
             }
-            throw Shader::RuntimeError("Native shader branch outside capture bounds at {:#x} +{:#x} [{:08x} {:08x} {:08x} {:08x}]",
+            throw source_error(fmt::format("Native shader branch outside capture bounds at {:#x} +{:#x} [{:08x} {:08x} {:08x} {:08x}]",
                                        program_base + native_header_size, index * 16,
                                        instruction.words[0], instruction.words[1],
-                                       instruction.words[2], instruction.words[3]);
+                                       instruction.words[2], instruction.words[3]));
         }
         if (status == Shader::Ampere::ProgramCaptureState::Result::Complete) break;
     }
@@ -623,7 +642,7 @@ std::shared_ptr<const LoweredNativeCode> GenericEnvironment::LowerNativeCode(u32
         }();
         !reject_list.empty() &&
         reject_list.find(fmt::format(",{:x},", program_base)) != std::string::npos) {
-        throw Shader::RuntimeError("Native shader at {:#x} rejected by EDEN_NX2_REJECT", program_base);
+        throw source_error(fmt::format("Native shader at {:#x} rejected by EDEN_NX2_REJECT", program_base));
     }
     // EDEN_NX2_SHADER_DUMP=<dir>: keep every captured native program (named by its key) so the
     // lowering can be tested offline against all of a game's shaders.
@@ -687,21 +706,21 @@ std::shared_ptr<const LoweredNativeCode> GenericEnvironment::LowerNativeCode(u32
                     std::ifstream file(override_path, std::ios::binary | std::ios::ate);
                     const auto length = file.tellg();
                     if (length <= 0 || length > 16 * 1024 * 1024) {
-                        throw Shader::RuntimeError("Invalid native shader override size");
+                        throw source_error(fmt::format("Invalid native shader override size"));
                     }
                     std::vector<u8> bytes(static_cast<size_t>(length));
                     file.seekg(0);
                     file.read(reinterpret_cast<char*>(bytes.data()), bytes.size());
-                    if (!file) throw Shader::RuntimeError("Native shader override read failed");
+                    if (!file) throw source_error(fmt::format("Native shader override read failed"));
                     const u32 source_bytes = Shader::Ampere::ProgramOverrideSourceSize(bytes);
                     if (source_bytes > native.size() * sizeof(Shader::Ampere::Instruction)) {
                         if (!gpu_memory->IsFullyMappedRange(program_base + native_header_size, source_bytes))
-                            throw Shader::RuntimeError("Unmapped extended native shader source");
+                            throw source_error(fmt::format("Unmapped extended native shader source"));
                         native.resize(source_bytes / sizeof(Shader::Ampere::Instruction));
                         gpu_memory->ReadBlock(program_base + native_header_size, native.data(), source_bytes);
                     }
                     lowered = Shader::Ampere::DecodeProgramOverride(bytes, native);
-                    if (!lowered) throw Shader::RuntimeError("Native shader override rejected: {}", lowered.error);
+                    if (!lowered) throw source_error(fmt::format("Native shader override rejected: {}", lowered.error));
                     LOG_WARNING(Shader, "Native shader resumed: key={}, instructions={}", key, lowered.instructions.size());
                     break;
                 }
@@ -712,10 +731,10 @@ std::shared_ptr<const LoweredNativeCode> GenericEnvironment::LowerNativeCode(u32
     if (!lowered) {
         const size_t failed = lowered.error_offset / sizeof(Shader::Ampere::Instruction);
         const auto words = failed < native.size() ? native[failed].words : std::array<u32, 4>{};
-        throw Shader::RuntimeError(
+        throw source_error(fmt::format(
             "Native shader at {:#x}, instruction {:#x}: {} [op {:03x} {:08x} {:08x} {:08x} {:08x}]",
             program_base, lowered.error_offset, lowered.error, words[0] & 0xfff, words[0],
-            words[1], words[2], words[3]);
+            words[1], words[2], words[3]));
     }
     auto result = std::make_shared<LoweredNativeCode>();
     result->native_program_key = Shader::Ampere::NativeProgramKey(native);
@@ -746,8 +765,8 @@ std::shared_ptr<const LoweredNativeCode> GenericEnvironment::LowerNativeCode(u32
         !reject_hashes.empty()) {
         for (const u64 hash : {result->native_program_key, NativeShaderHash(lowered_code)}) {
             if (reject_hashes.find(fmt::format(",{:016x},", hash)) != std::string::npos) {
-                throw Shader::RuntimeError("Native shader at {:#x} ({:016x}) rejected by EDEN_NX2_REJECT_HASH",
-                                           program_base, hash);
+                throw source_error(fmt::format("Native shader at {:#x} ({:016x}) rejected by EDEN_NX2_REJECT_HASH",
+                                           program_base, hash));
             }
         }
     }
@@ -755,8 +774,8 @@ std::shared_ptr<const LoweredNativeCode> GenericEnvironment::LowerNativeCode(u32
     if (VideoCore::Nx2Debug::AnyRejected()) {
         for (const u64 hash : {result->native_program_key, NativeShaderHash(lowered_code)}) {
             if (VideoCore::Nx2Debug::IsRejected(hash)) {
-                throw Shader::RuntimeError("Native shader at {:#x} ({:016x}) rejected by the debug server",
-                                           program_base, hash);
+                throw source_error(fmt::format("Native shader at {:#x} ({:016x}) rejected by the debug server",
+                                           program_base, hash));
             }
         }
     }

@@ -62,6 +62,8 @@ class ShaderCache : public VideoCommon::ChannelSetupCaches<VideoCommon::ChannelI
     };
 
 public:
+    ~ShaderCache() override;
+
     /// Device pages this cache ever registered objects on (InnerInvalidation skips the rest).
     VideoCommon::PageFilter page_filter;
 
@@ -166,6 +168,8 @@ private:
     bool IsRejected(VAddr addr);
     /// Remembers the exception being handled as this address's rejection.
     void RememberRejection(VAddr addr);
+    void UnmarkRejection(const std::vector<std::pair<DAddr, size_t>>& ranges);
+    void RefreshRejectedStages();
     /// Hash of the state task and mesh programs are translated with.
     u64 MeshStateHash() const;
 
@@ -179,10 +183,16 @@ private:
     std::vector<std::unique_ptr<ShaderInfo>> storage;
     std::vector<Entry*> marked_for_removal;
 
-    /// Native programs the lowering rejected, by address, so each draw or dispatch rethrows the
-    /// first error instead of lowering again; dropped when guest memory there is written.
+    /// Native programs the lowering rejected, keyed by start but invalidated by every captured
+    /// source page. Stable failures keep their first error until relevant memory changes.
     std::mutex rejected_mutex;
-    ::Common::unordered_map<u64, std::exception_ptr> rejected_native;
+    struct RejectedProgram {
+        std::exception_ptr error;
+        std::vector<std::pair<DAddr, size_t>> ranges;
+    };
+    ::Common::unordered_map<u64, RejectedProgram> rejected_native;
+    // Invalidations can arrive from CPU threads; only RefreshStages changes channel flags.
+    std::atomic<bool> rejected_stages_dirty{};
     /// Bounds of every address ever rejected (never shrinks): a quick test for invalidations.
     std::atomic<VAddr> rejected_lowest{~VAddr{}};
     std::atomic<VAddr> rejected_highest{};

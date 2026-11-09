@@ -31,6 +31,7 @@
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/memory_manager.h"
 #include "video_core/nx2_debug_control.h"
+#include "video_core/native_shader_source.h"
 #include "video_core/shader_cache.h"
 #include "video_core/shader_environment.h"
 #include "video_core/texture_cache/util.h"
@@ -86,6 +87,9 @@ void ShaderCache::RefreshDebugRejections(bool unrejected) {
     }
     if (unrejected) {
         std::scoped_lock lock{rejected_mutex};
+        for (const auto& [address, rejected] : rejected_native) {
+            UnmarkRejection(rejected.ranges);
+        }
         rejected_native.clear();
     }
     // shader_infos may point at removed programs: every channel must refresh its stages.
@@ -98,6 +102,27 @@ void ShaderCache::RefreshDebugRejections(bool unrejected) {
 
 ShaderCache::ShaderCache(Tegra::MaxwellDeviceMemoryManager& device_memory_)
     : device_memory{device_memory_} {}
+
+ShaderCache::~ShaderCache() {
+    for (const auto& [address, rejected] : rejected_native) {
+        UnmarkRejection(rejected.ranges);
+    }
+}
+
+void ShaderCache::UnmarkRejection(const std::vector<std::pair<DAddr, size_t>>& ranges) {
+    device_memory.UpdatePagesCachedBatch(ranges, -1);
+}
+
+void ShaderCache::RefreshRejectedStages() {
+    if (!rejected_stages_dirty.load(std::memory_order_relaxed) ||
+        !rejected_stages_dirty.exchange(false, std::memory_order_acquire)) {
+        return;
+    }
+    std::scoped_lock lock{config_mutex};
+    for (const size_t id : active_channel_ids) {
+        channel_storage[id].maxwell3d.dirty.flags[VideoCommon::Dirty::Shaders] = true;
+    }
+}
 
 // Task and mesh programs are translated with the mesh registers and the header of the pass-through
 // geometry program (per-primitive outputs), so pipelines are keyed by them too.
@@ -116,6 +141,7 @@ u64 ShaderCache::MeshStateHash() const {
 }
 
 bool ShaderCache::RefreshStages(std::array<u64, 6>& unique_hashes) try {
+    RefreshRejectedStages();
     auto& dirty{maxwell3d->dirty.flags};
     if (!dirty[VideoCommon::Dirty::Shaders]) {
         return last_shaders_valid;
@@ -309,7 +335,7 @@ const ShaderInfo* ShaderCache::ComputeShader() {
 void ShaderCache::RethrowIfRejected(VAddr addr) {
     std::scoped_lock lock{rejected_mutex};
     if (const auto it = rejected_native.find(addr); it != rejected_native.end()) {
-        std::rethrow_exception(it->second);
+        std::rethrow_exception(it->second.error);
     }
 }
 
@@ -321,16 +347,29 @@ bool ShaderCache::IsRejected(VAddr addr) {
 void ShaderCache::RememberRejection(VAddr addr) {
     std::scoped_lock lock{rejected_mutex};
     if (rejected_native.contains(addr)) {
-        // Called from a catch block: keep the first exception for that address instead of
-        // capturing and inserting a new one on every rejected dispatch.
-        return;
+        return; // Keep the first error and register each source page only once.
     }
-    rejected_native.emplace(addr, std::current_exception());
-    page_filter.Mark(addr, 1); // InnerInvalidation reaches InvalidatePagesInRegion for it
-    rejected_lowest.store((std::min)(rejected_lowest.load(std::memory_order_relaxed), addr),
-                          std::memory_order_relaxed);
-    rejected_highest.store((std::max)(rejected_highest.load(std::memory_order_relaxed), addr),
-                           std::memory_order_relaxed);
+    RejectedProgram rejected{.error = std::current_exception()};
+    try {
+        std::rethrow_exception(rejected.error);
+    } catch (const NativeShaderSourceError& error) {
+        rejected.ranges = error.SourceRanges();
+    } catch (...) {
+        // Failures before native capture still depend on the header/start page.
+    }
+    if (rejected.ranges.empty()) {
+        rejected.ranges.emplace_back(addr & ~(NativeShaderSourcePageSize - 1),
+                                     NativeShaderSourcePageSize);
+    }
+    const auto [it, inserted] = rejected_native.emplace(addr, std::move(rejected));
+    for (const auto& [start, size] : it->second.ranges) {
+        page_filter.Mark(start, size);
+        rejected_lowest.store(std::min(rejected_lowest.load(std::memory_order_relaxed), start),
+                              std::memory_order_relaxed);
+        rejected_highest.store(std::max(rejected_highest.load(std::memory_order_relaxed), start + size),
+                               std::memory_order_relaxed);
+    }
+    device_memory.UpdatePagesCachedBatch(it->second.ranges, 1);
 }
 
 void ShaderCache::GetGraphicsEnvironments(GraphicsEnvironments& result,
@@ -387,12 +426,22 @@ void ShaderCache::InvalidatePagesInRegion(VAddr addr, size_t size) {
     const VAddr addr_end = addr + size;
     // Rejected programs are few and in a few places: look at them only for writes that can
     // reach them (this runs for every inline upload and pre-draw invalidation).
-    if (addr_end > rejected_lowest.load(std::memory_order_relaxed) &&
-        addr <= rejected_highest.load(std::memory_order_relaxed)) {
+    if (size != 0 && addr_end > rejected_lowest.load(std::memory_order_relaxed) &&
+        addr < rejected_highest.load(std::memory_order_relaxed)) {
         std::scoped_lock lock{rejected_mutex};
+        bool removed{};
         boost::unordered::erase_if(rejected_native, [&](const auto& rejected) {
-            return rejected.first >= addr && rejected.first < addr_end;
+            const auto& ranges = rejected.second.ranges;
+            const bool overlaps = std::ranges::any_of(ranges, [&](const auto& source) {
+                return addr < source.first + source.second && source.first < addr_end;
+            });
+            if (overlaps) {
+                UnmarkRejection(ranges);
+                removed = true;
+            }
+            return overlaps;
         });
+        if (removed) rejected_stages_dirty.store(true, std::memory_order_release);
     }
     const u64 page_end = (addr_end + YUZU_PAGESIZE - 1) >> YUZU_PAGEBITS;
     for (u64 page = addr >> YUZU_PAGEBITS; page < page_end; ++page) {

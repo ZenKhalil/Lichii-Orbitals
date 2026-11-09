@@ -8,8 +8,18 @@
 #include <stdexcept>
 #include <vector>
 #include <catch2/catch_test_macros.hpp>
+#include "common/page_table.h"
+#include "core/core.h"
 #include "core/device_memory.h"
+#include "core/hle/kernel/k_process.h"
+#include "core/hle/kernel/kernel.h"
+#include "core/memory.h"
+#include "tests/core/system_test_context.h"
+#include "video_core/control/channel_state.h"
+#include "video_core/dirty_flags.h"
+#include "video_core/memory_manager.h"
 #include "video_core/nx2_debug_control.h"
+#include "video_core/native_shader_source.h"
 #include "video_core/shader_cache.h"
 
 namespace VideoCommon {
@@ -33,8 +43,24 @@ struct ShaderCacheTestAccess {
         data->lowered_native = std::move(lowered);
         cache.Register(std::move(data), address, 0x100);
     }
-    static void Reject(ShaderCache& cache, VAddr address) {
-        cache.rejected_native.emplace(address, std::make_exception_ptr(std::runtime_error{"rejected"}));
+    static void Reject(ShaderCache& cache, VAddr address,
+                       NativeShaderSourceRanges ranges = {}, std::string message = "rejected") {
+        try {
+            throw NativeShaderSourceError{Shader::Exception{std::move(message)}, std::move(ranges)};
+        } catch (...) {
+            cache.RememberRejection(address);
+        }
+    }
+    static std::string RejectionMessage(ShaderCache& cache, VAddr address) {
+        try {
+            cache.RethrowIfRejected(address);
+        } catch (const std::exception& error) {
+            return error.what();
+        }
+        return {};
+    }
+    static bool RefreshStages(ShaderCache& cache, std::array<u64, 6>& hashes) {
+        return cache.RefreshStages(hashes);
     }
     static bool IsRejected(ShaderCache& cache, VAddr address) {
         return cache.IsRejected(address);
@@ -174,4 +200,186 @@ TEST_CASE("Shader invalidation CPU benchmark", "[.][cache_bench]") {
     }
     std::cout << "Shader invalidation: sequential=" << sequential_ms << " ms batched=" << batched_ms
               << " ms (CPU only, not gameplay FPS)\n";
+}
+
+
+TEST_CASE("Rejected native shader body writes permit another compile", "[shader_invalidation][shader_rejection]") {
+    Core::DeviceMemory memory;
+    Tegra::MaxwellDeviceMemoryManager device_memory{memory};
+    auto cache = ShaderCacheTestAccess::Create(device_memory);
+    constexpr DAddr start = 0x100300;
+    const VideoCommon::NativeShaderSourceRanges pages{{0x100000, 0x2000}, {0x900000, 0x1000}};
+    ShaderCacheTestAccess::Reject(*cache, start, pages);
+    REQUIRE(ShaderCacheTestAccess::IsRejected(*cache, start));
+    REQUIRE(ShaderCacheTestAccess::RejectionMessage(*cache, start) == "rejected");
+    DAddr write{};
+    SECTION("later bytes on the first page") { write = start + 0x780; }
+    SECTION("a later contiguous source page") { write = 0x101700; }
+    SECTION("a GPU-contiguous page with separate device backing") { write = 0x900040; }
+    cache->InvalidateRegion(write, 16);
+    REQUIRE_FALSE(ShaderCacheTestAccess::IsRejected(*cache, start));
+    REQUIRE(ShaderCacheTestAccess::RejectionMessage(*cache, start).empty());
+    // A stable failure can be cached again after retry; unrelated writes do not cause churn.
+    ShaderCacheTestAccess::Reject(*cache, start, pages, "retry failed");
+    cache->InvalidateRegion(0x500000, 16);
+    REQUIRE(ShaderCacheTestAccess::RejectionMessage(*cache, start) == "retry failed");
+}
+
+TEST_CASE("Rejected native shader source pages reach the invalidation filter", "[shader_invalidation][shader_rejection]") {
+    Core::DeviceMemory memory;
+    Tegra::MaxwellDeviceMemoryManager device_memory{memory};
+    auto cache = ShaderCacheTestAccess::Create(device_memory);
+    ShaderCacheTestAccess::Reject(*cache, 0x100300, {{0x100000, 0x2000}, {0x900000, 0x1000}});
+    REQUIRE(cache->page_filter.Any(0x101700, 16));
+    REQUIRE(cache->page_filter.Any(0x900040, 16));
+    REQUIRE_FALSE(cache->page_filter.Any(0x500000, 16));
+}
+
+TEST_CASE("Rejected native shader batch invalidation preserves unrelated failures", "[shader_invalidation][shader_rejection]") {
+    Core::DeviceMemory memory;
+    Tegra::MaxwellDeviceMemoryManager device_memory{memory};
+    auto cache = ShaderCacheTestAccess::Create(device_memory);
+    constexpr DAddr changed = 0x100300, kept = 0x300100;
+    ShaderCacheTestAccess::Reject(*cache, changed, {{0x100000, 0x2000}}, "first error");
+    ShaderCacheTestAccess::Reject(*cache, changed, {{0x700000, 0x1000}}, "duplicate error");
+    ShaderCacheTestAccess::Reject(*cache, kept, {{0x300000, 0x1000}}, "kept error");
+    cache->InvalidateRegion(0x102000, 1); // Half-open end is outside the recorded range.
+    cache->InvalidateRegion(0x101700, 0); // An empty write changes nothing.
+    cache->InvalidateRegion(0x700000, 16); // Duplicate rejection did not extend ownership.
+    REQUIRE(ShaderCacheTestAccess::RejectionMessage(*cache, changed) == "first error");
+    const std::array writes{std::pair<DAddr, size_t>{0x101700, 16},
+                            std::pair<DAddr, size_t>{0x101700, 16},
+                            std::pair<DAddr, size_t>{0x500000, 16}};
+    cache->InvalidateRegions(writes);
+    REQUIRE_FALSE(ShaderCacheTestAccess::IsRejected(*cache, changed));
+    REQUIRE(ShaderCacheTestAccess::RejectionMessage(*cache, kept) == "kept error");
+    cache->RefreshDebugRejections(true);
+    REQUIRE_FALSE(ShaderCacheTestAccess::IsRejected(*cache, kept));
+}
+
+TEST_CASE("Native source pages preserve discontiguous backing without broad ranges", "[shader_invalidation][shader_rejection]") {
+    const std::array ranges{std::pair<GPUVAddr, size_t>{0x80ff0, 0x1020},
+                            std::pair<GPUVAddr, size_t>{0x82000, 16}};
+    const auto result = VideoCommon::NativeShaderSourcePages(ranges, [](GPUVAddr page) -> std::optional<DAddr> {
+        if (page == 0x80000) return 0x300000;
+        if (page == 0x81000) return 0x900000;
+        if (page == 0x82000) return 0x301000;
+        return std::nullopt;
+    });
+    const VideoCommon::NativeShaderSourceRanges expected{{0x300000, 0x2000}, {0x900000, 0x1000}};
+    REQUIRE(result == expected);
+    const std::array too_large{std::pair<GPUVAddr, size_t>{0x80000, 2 * 1024 * 1024}};
+    unsigned calls{};
+    REQUIRE(VideoCommon::NativeShaderSourcePages(too_large, [&](GPUVAddr page) -> std::optional<DAddr> {
+        ++calls;
+        return page;
+    }).empty());
+    REQUIRE(calls == 0);
+}
+
+
+namespace {
+// Exercise the real device-page counters through their observable CPU page-cache transitions.
+// A device mapping without CPU backing would skip those counters and hide ownership leaks.
+struct RejectedPageFixture {
+    ScopedSystemTestContext context;
+    Core::System system;
+    std::unique_ptr<Kernel::KProcess> process;
+    std::unique_ptr<Tegra::MaxwellDeviceMemoryManager> device;
+    std::unique_ptr<VideoCommon::ShaderCache> cache;
+    Core::Asid asid{};
+    static constexpr DAddr Device = 0x100000;
+    static constexpr VAddr Cpu = 0x4000;
+
+    RejectedPageFixture() {
+        system.Initialize();
+        process = std::make_unique<Kernel::KProcess>(system.Kernel());
+        auto& table = process->GetPageTable().GetImpl();
+        table.Resize(20, 12);
+        auto* backing = system.DeviceMemory().buffer.BackingBasePointer() + 0x10000;
+        for (size_t index = 0; index < 3; ++index) {
+            table.entries.GetAndFault((Cpu >> 12) + index).Store(
+                false, Common::PageType::Memory, 1,
+                reinterpret_cast<uintptr_t>(backing) - Cpu);
+        }
+        auto& memory = process->GetMemory();
+        memory.SetCurrentPageTable(*process);
+        device = std::make_unique<Tegra::MaxwellDeviceMemoryManager>(system.DeviceMemory());
+        asid = device->RegisterProcess(&memory);
+        device->Map(Device, Cpu, 0x3000, asid);
+        cache = ShaderCacheTestAccess::Create(*device);
+    }
+    ~RejectedPageFixture() {
+        cache.reset();
+        device->UnregisterProcess(asid);
+        device.reset();
+        system.Kernel().UnregisterKernelObject(process.get());
+        process.reset();
+    }
+    Common::PageType PageType(size_t index) {
+        return process->GetPageTable().GetImpl().entries.GetUnchecked((Cpu >> 12) + index).Type();
+    }
+};
+} // namespace
+
+TEST_CASE("Rejected shader page ownership balances mapped CPU protection", "[shader_invalidation][shader_rejection]") {
+    RejectedPageFixture f;
+    constexpr DAddr first = RejectedPageFixture::Device + 0x300;
+    constexpr DAddr second = RejectedPageFixture::Device + 0x1100;
+    ShaderCacheTestAccess::Reject(*f.cache, first, {{first & ~0xfffULL, 0x2000}});
+    ShaderCacheTestAccess::Reject(*f.cache, second, {{second & ~0xfffULL, 0x2000}});
+    // Duplicate rejection must not add a reference to an existing or a new page.
+    ShaderCacheTestAccess::Reject(*f.cache, first, {{first & ~0xfffULL, 0x3000}});
+    for (size_t page = 0; page < 3; ++page) {
+        REQUIRE(f.PageType(page) == Common::PageType::RasterizerCachedMemory);
+    }
+    f.cache->InvalidateRegion(first + 0x780, 16);
+    CHECK(f.PageType(0) == Common::PageType::Memory);
+    CHECK(f.PageType(1) == Common::PageType::RasterizerCachedMemory);
+    CHECK(f.PageType(2) == Common::PageType::RasterizerCachedMemory);
+    SECTION("invalidation releases the final shared page reference") {
+        f.cache->InvalidateRegion(second + 0x1000, 16);
+    }
+    SECTION("debug clear releases remaining references") {
+        f.cache->RefreshDebugRejections(true);
+    }
+    SECTION("cache destruction releases remaining references") {
+        f.cache.reset();
+    }
+    for (size_t page = 0; page < 3; ++page) {
+        CHECK(f.PageType(page) == Common::PageType::Memory);
+    }
+}
+
+TEST_CASE("Rejected shader invalidation defers channel flags to GPU refresh", "[shader_invalidation][shader_rejection]") {
+    ScopedSystemTestContext context;
+    Core::System system;
+    Core::DeviceMemory physical;
+    Tegra::MaxwellDeviceMemoryManager device{physical};
+    Tegra::MemoryManager memory{system, device, 32, 1ULL << 31};
+    Tegra::Control::ChannelState first{1}, second{2}, erased{3};
+    auto cache = ShaderCacheTestAccess::Create(device);
+    for (auto* channel : {&first, &second, &erased}) {
+        channel->memory_manager = &memory;
+        channel->payload.emplace(system, memory, *channel);
+        cache->CreateChannel(*channel);
+        channel->payload->maxwell_3d.dirty.flags.reset();
+    }
+    cache->EraseChannel(erased.bind_id);
+    cache->BindToChannel(first.bind_id);
+    ShaderCacheTestAccess::Reject(*cache, 0x100300, {{0x100000, 0x2000}});
+    cache->InvalidateRegion(0x101700, 16);
+    // Invalidation is also called by CPU threads. It must not write any engine's flags here.
+    for (auto* channel : {&first, &second, &erased}) {
+        CHECK_FALSE(channel->payload->maxwell_3d.dirty.flags[VideoCommon::Dirty::Shaders]);
+    }
+    std::array<u64, 6> hashes{};
+    ShaderCacheTestAccess::RefreshStages(*cache, hashes);
+    // First channel has consumed its flag; every other active channel still needs refresh.
+    CHECK_FALSE(first.payload->maxwell_3d.dirty.flags[VideoCommon::Dirty::Shaders]);
+    CHECK(second.payload->maxwell_3d.dirty.flags[VideoCommon::Dirty::Shaders]);
+    CHECK_FALSE(erased.payload->maxwell_3d.dirty.flags[VideoCommon::Dirty::Shaders]);
+    second.payload->maxwell_3d.dirty.flags[VideoCommon::Dirty::Shaders] = false;
+    ShaderCacheTestAccess::RefreshStages(*cache, hashes);
+    CHECK_FALSE(second.payload->maxwell_3d.dirty.flags[VideoCommon::Dirty::Shaders]);
 }
