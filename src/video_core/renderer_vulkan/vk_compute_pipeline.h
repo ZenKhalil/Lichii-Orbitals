@@ -49,7 +49,8 @@ public:
                              PipelineStatistics* pipeline_statistics,
                              VideoCore::ShaderNotify* shader_notify, const Shader::Info& info,
                              vk::ShaderModule spv_module, u64 shader_hash,
-                             std::optional<Shader::ImageBufferStoreType> store_type = std::nullopt);
+                             std::optional<Shader::ImageBufferStoreType> store_type = std::nullopt,
+                             std::optional<Shader::UniformTexelType> uniform_type = std::nullopt);
 
     ComputePipeline& operator=(ComputePipeline&&) noexcept = delete;
     ComputePipeline(ComputePipeline&&) noexcept = delete;
@@ -70,6 +71,9 @@ public:
     // Called before publication, with synchronous, fully built children only.
     void SetStoreFamily(std::array<std::unique_ptr<ComputePipeline>, 3> members,
                         std::array<bool, 4> formats);
+
+    void SetUniformFamily(std::array<std::unique_ptr<ComputePipeline>, 3> members,
+                          std::array<bool, 6> formats);
 
     static constexpr u64 Ocarina1440pShader = 0x6bd913e1f34e83ebULL;
     [[nodiscard]] bool CanReplaceOcarinaUpscale() const;
@@ -111,6 +115,11 @@ public:
                 return false;
             }
         }
+        for (const auto& member : uniform_family) {
+            if (member && !member->IsBuildTaskDone()) {
+                return false;
+            }
+        }
         return true;
     }
 
@@ -118,6 +127,7 @@ private:
     /// Builds the pipeline once, on whichever thread gets here first.
     void RunBuild();
     [[nodiscard]] ComputePipeline* SelectStorePipeline(VkFormat format) noexcept;
+    [[nodiscard]] ComputePipeline* SelectUniformPipeline(VkFormat format) noexcept;
 
     const Device& device;
     vk::PipelineCache& pipeline_cache;
@@ -128,6 +138,9 @@ private:
     std::optional<Shader::ImageBufferStoreType> store_type;
     std::array<std::unique_ptr<ComputePipeline>, 3> store_family;
     std::array<bool, 4> store_formats{};
+    std::optional<Shader::UniformTexelType> uniform_type;
+    std::array<std::unique_ptr<ComputePipeline>, 3> uniform_family;
+    std::array<bool, 6> uniform_formats{};
     u32 num_descriptor_entries{};
     boost::container::small_vector<VideoCommon::ImageViewId, 8> written_images;
     std::vector<SampledImage> sampled_images;

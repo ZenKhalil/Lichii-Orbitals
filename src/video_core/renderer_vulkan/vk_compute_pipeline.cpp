@@ -22,6 +22,7 @@
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
 #include "video_core/renderer_vulkan/vk_compute_pipeline.h"
 #include "video_core/renderer_vulkan/typed_buffer_store.h"
+#include "video_core/renderer_vulkan/typed_uniform_compute.h"
 #include "video_core/renderer_vulkan/texel_type_trace_capture.h"
 #include "video_core/renderer_vulkan/vk_descriptor_pool.h"
 #include "video_core/renderer_vulkan/vk_frame_dump.h"
@@ -211,11 +212,16 @@ ComputePipeline::ComputePipeline(const Device& device_, Scheduler& scheduler, vk
                                  PipelineStatistics* pipeline_statistics,
                                  VideoCore::ShaderNotify* shader_notify, const Shader::Info& info_,
                                  vk::ShaderModule spv_module_, u64 shader_hash_,
-                                 std::optional<Shader::ImageBufferStoreType> store_type_)
+                                 std::optional<Shader::ImageBufferStoreType> store_type_,
+                                 std::optional<Shader::UniformTexelType> uniform_type_)
     : device{device_},
       pipeline_cache(pipeline_cache_), guest_descriptor_queue{guest_descriptor_queue_},
       descriptor_buffer_ring{descriptor_buffer_ring_}, info{info_},
-      shader_hash{shader_hash_}, store_type{store_type_}, spv_module(std::move(spv_module_)) {
+      shader_hash{shader_hash_}, store_type{store_type_}, uniform_type{uniform_type_},
+      spv_module(std::move(spv_module_)) {
+    if (store_type && uniform_type) {
+        throw Shader::LogicError("Compute families must have exactly one specialization kind");
+    }
     if (shader_notify) {
         shader_notify->MarkShaderBuilding();
     }
@@ -404,6 +410,49 @@ ComputePipeline* ComputePipeline::SelectStorePipeline(VkFormat format) noexcept 
     return store_family[static_cast<size_t>(*selected)].get();
 }
 
+void ComputePipeline::SetUniformFamily(std::array<std::unique_ptr<ComputePipeline>, 3> members,
+                                     std::array<bool, 6> formats) {
+    if (store_type || !uniform_type || !IsBuildTaskDone() || !IsBound()) {
+        throw Shader::LogicError("Incomplete compute uniform family base");
+    }
+    for (size_t i = 0; i < members.size(); ++i) {
+        const auto& member = members[i];
+        if (i == static_cast<size_t>(*uniform_type)) {
+            if (member) {
+                throw Shader::LogicError("Duplicate compute uniform family base");
+            }
+            continue;
+        }
+        if (!member || !member->IsBuildTaskDone() || !member->IsBound() ||
+            member->store_type || member->info != info ||
+            member->uniform_type != static_cast<Shader::UniformTexelType>(i) ||
+            member->num_descriptor_entries != num_descriptor_entries ||
+            member->uses_descriptor_buffer != uses_descriptor_buffer ||
+            member->uses_push_descriptor != uses_push_descriptor ||
+            member->descriptor_buffer_layout.size != descriptor_buffer_layout.size ||
+            !std::ranges::equal(member->descriptor_buffer_layout.bindings,
+                                descriptor_buffer_layout.bindings, [](const auto& a, const auto& b) {
+                                    return a.type == b.type && a.count == b.count &&
+                                           a.offset == b.offset && a.stride == b.stride;
+                                })) {
+            throw Shader::LogicError("Incompatible compute uniform family member layout");
+        }
+    }
+    uniform_family = std::move(members);
+    uniform_formats = formats;
+}
+
+ComputePipeline* ComputePipeline::SelectUniformPipeline(VkFormat format) noexcept {
+    if (!uniform_type) {
+        return this;
+    }
+    const auto selected = ComputeUniformType(format, uniform_formats);
+    if (!selected || *selected == *uniform_type) {
+        return this;
+    }
+    return uniform_family[static_cast<size_t>(*selected)].get();
+}
+
 bool ComputePipeline::CanReplaceOcarinaUpscale() const {
     const bool known_shader =
         shader_hash == 0xe40f5efb5480e692ULL || shader_hash == Ocarina1440pShader;
@@ -429,7 +478,7 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
     guest_descriptor_queue.Acquire(scheduler, num_descriptor_entries, uses_descriptor_buffer);
     const size_t store_entry = Shader::NumDescriptors(info.constant_buffer_descriptors) +
                                Shader::NumDescriptors(info.storage_buffers_descriptors);
-    if (store_type) {
+    if (store_type || uniform_type) {
         guest_descriptor_queue.ObserveTexelBufferFormat(store_entry);
     }
 
@@ -629,7 +678,7 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
                     format = *explicit_format;
                 }
             }
-            if (texel_trace.Active() && !store_type) {
+            if (texel_trace.Active() && !store_type && !(uniform_type && !is_image)) {
                 const TexelTypeTrace::Identity identity{
                     .hash = shader_hash,
                     .program_address = kepler_compute.regs.code_loc.Address() + qmd.program_start,
@@ -685,6 +734,43 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
             offsets.SkipBuffers(info);
             TexelTypeTrace::Capture(
                 texel_trace, info, identity, offsets, info.image_buffer_descriptors.front(), 0,
+                views.front().index,
+                Tegra::Texture::TextureHeaderIndex(views.front().index,
+                                                   kepler_compute.regs.tic.limit,
+                                                   gpu_memory.UsesNativeTiling()),
+                view.format, view.format, view.GpuAddr(), view.BufferSize(),
+                static_cast<u32>(view.type), numeric);
+            TexelTypeTrace::Scope::Host(&guest_descriptor_queue, store_entry,
+                                       TexelTypeTrace::Handle(prepared->view), prepared->offset,
+                                       prepared->size, static_cast<u32>(prepared->format));
+        }
+    }
+    if (uniform_type) {
+        const auto prepared = guest_descriptor_queue.TakeTexelBufferBinding();
+        if (!prepared) {
+            throw Shader::LogicError("Typed compute uniform fetch has no prepared host buffer view");
+        }
+        selected = SelectUniformPipeline(prepared->format);
+        if (!selected) {
+            throw Shader::LogicError("Typed compute uniform fetch has no compatible member");
+        }
+        if (texel_trace.Active()) {
+            const auto& view = texture_cache.GetImageView(views.front().id);
+            const TexelTypeTrace::Identity identity{
+                .hash = shader_hash,
+                .program_address = kepler_compute.regs.code_loc.Address() + qmd.program_start,
+                .stage = 5,
+                .native = kepler_compute.IsNativeMode(),
+            };
+            const auto numeric = *selected->uniform_type == Shader::UniformTexelType::Float
+                                     ? TexelTypeTrace::Numeric::Float
+                                 : *selected->uniform_type == Shader::UniformTexelType::Sint
+                                     ? TexelTypeTrace::Numeric::Sint
+                                     : TexelTypeTrace::Numeric::Uint;
+            TexelTypeTrace::Offsets offsets;
+            offsets.SkipBuffers(info);
+            TexelTypeTrace::Capture(
+                texel_trace, info, identity, offsets, info.texture_buffer_descriptors.front(), 0,
                 views.front().index,
                 Tegra::Texture::TextureHeaderIndex(views.front().index,
                                                    kepler_compute.regs.tic.limit,

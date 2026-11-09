@@ -48,6 +48,7 @@
 #include "video_core/renderer_vulkan/vertex_repack.h"
 #include "video_core/renderer_vulkan/vk_compute_pipeline.h"
 #include "video_core/renderer_vulkan/typed_buffer_store.h"
+#include "video_core/renderer_vulkan/typed_uniform_compute.h"
 #include "video_core/renderer_vulkan/vk_cooperative_hmma_test.h"
 #include "video_core/renderer_vulkan/vk_descriptor_pool.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
@@ -2212,6 +2213,7 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
     const Shader::HostTranslateInfo family_host_info{host_info};
     const Shader::Profile family_profile{profile};
     const bool loop_safety = !Settings::values.disable_shader_loop_safety_checks;
+    const bool bloom_workaround = Settings::values.fix_bloom_effects.GetValue();
     auto program{TranslateProgram(pools.inst, pools.block, env, cfg, family_host_info,
                                    &translate_options)};
     const VkDriverIdKHR driver_id = device.GetDriverID();
@@ -2297,6 +2299,80 @@ ComputePipelineCacheEntry PipelineCache::CreateComputePipeline(
                 original_info.image_buffer_descriptors.front().is_integer ? Type::Uint : Type::Float);
             auto base = std::move(members[base_index]);
             base->SetStoreFamily(std::move(members), supported);
+            return {.pipeline = std::move(base),
+                    .null_pointer_slots = env.NullStoragePointerSlots(),
+                    .mapped_pointers = env.MappedStoragePointerKeys()};
+        }
+    }
+    if (env.IsNativeProgram() && capture_inputs && IsSingleComputeUniformFetch(program)) {
+        std::array<bool, ComputeUniformFormats.size()> supported{};
+        for (size_t i = 0; i < ComputeUniformFormats.size(); ++i) {
+            const auto features =
+                device.GetPhysical().GetFormatProperties(ComputeUniformFormats[i]).bufferFeatures;
+            supported[i] = (features & VK_FORMAT_FEATURE_UNIFORM_TEXEL_BUFFER_BIT) != 0;
+        }
+        std::optional<VideoCommon::ComputeEnvironmentSnapshot> snapshot;
+        if (std::ranges::any_of(supported, [](bool value) { return value; })) {
+            try {
+                snapshot.emplace(capture_inputs());
+            } catch (const Shader::Exception& exception) {
+                // The original translation remains valid. An inconsistent capture cannot be replayed.
+                LOG_WARNING(Render_Vulkan, "Compute uniform family unavailable shader={:016x}: {}",
+                            key.unique_hash, exception.what());
+            }
+        }
+        if (snapshot) {
+            using Type = Shader::UniformTexelType;
+            constexpr std::array types{Type::Float, Type::Uint, Type::Sint};
+            std::array<vk::ShaderModule, types.size()> modules;
+            std::array<Shader::Info, types.size()> infos;
+            const auto original_info = program.info;
+            for (size_t i = 0; i < types.size(); ++i) {
+                auto replay = snapshot->CreateReplay();
+                ShaderPools member_pools;
+                Shader::Maxwell::Flow::CFG member_cfg{replay, member_pools.flow_block,
+                                                      replay.StartAddress()};
+                auto member = TranslateProgram(member_pools.inst, member_pools.block, replay,
+                                                 member_cfg, family_host_info, &translate_options);
+                if (needs_shared_mem_clamp && member.shared_memory_size > max_shared_memory) {
+                    member.shared_memory_size = max_shared_memory;
+                }
+                if (!IsSingleComputeUniformFetch(member) || member.info != original_info ||
+                    member.workgroup_size != program.workgroup_size ||
+                    member.local_memory_size != program.local_memory_size ||
+                    member.shared_memory_size != program.shared_memory_size) {
+                    throw Shader::LogicError("Compute input replay changed the translated program");
+                }
+                Shader::RuntimeInfo runtime;
+                runtime.uniform_texel_types = {types[i]};
+                runtime.enable_bloom_workaround = bloom_workaround;
+                runtime.enable_shader_loop_safety = loop_safety;
+                Shader::Backend::Bindings bindings;
+                const auto member_code = EmitSPIRV(family_profile, runtime, member, bindings);
+                infos[i] = member.info;
+                if (i != 0 && infos[i] != infos[0]) {
+                    throw Shader::LogicError("Typed compute uniform emission changed pipeline metadata");
+                }
+                device.SaveShader(member_code);
+                modules[i] = BuildShader(device, member_code);
+            }
+
+            // Construct only after all modules exist. No worker captures a partially owned member.
+            // Count each synchronous build with a scope so layout/statistics failures also balance.
+            std::array<std::unique_ptr<ComputePipeline>, types.size()> members;
+            for (size_t i = 0; i < types.size(); ++i) {
+                shader_notify.MarkShaderBuilding();
+                SCOPE_EXIT { shader_notify.MarkShaderComplete(); };
+                members[i] = std::make_unique<ComputePipeline>(
+                    device, scheduler, vulkan_pipeline_cache, descriptor_pool, guest_descriptor_queue,
+                    descriptor_buffer_ring, nullptr, statistics, nullptr, infos[i],
+                    std::move(modules[i]), key.unique_hash, std::nullopt, types[i]);
+                if (!members[i]->IsBound() || !members[i]->IsBuildTaskDone()) {
+                    throw Shader::RuntimeError("Typed compute uniform member failed to build");
+                }
+            }
+            auto base = std::move(members[static_cast<size_t>(Type::Float)]);
+            base->SetUniformFamily(std::move(members), supported);
             return {.pipeline = std::move(base),
                     .null_pointer_slots = env.NullStoragePointerSlots(),
                     .mapped_pointers = env.MappedStoragePointerKeys()};
