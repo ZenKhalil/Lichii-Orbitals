@@ -46,6 +46,24 @@ does not isolate a code regression. A left-only magenta-blue flare appeared with
 both cameras viewing the same machinery from nearby positions. Build 2 remains
 recommended; neither rendering correctness nor stable 30 FPS is established.
 
+## Candidate 6 — correctness preparation and measured CPU experiment
+
+The unreleased candidate rejects serialization when a compute capture observes
+conflicting inputs. It also adds dormant ordered-uniform preparation and bounded
+shader-hash filtering for diagnostics. These changes do not activate the remaining
+multi-declaration game shaders. Native regression and synthetic value checks are
+separate from gameplay coverage.
+
+A same-binary off/on/off comparison confirmed the intended one/two/one PAUSE
+sequences in saved generated code. The extra PAUSE was slower in both measured
+window durations and remains disabled. The four accepted baseline windows ranged
+from 24.17 to 25.24 FPS. One added 10.33 ms of audio padding; the other five
+comparison windows added none. All processes exited without an OS kill, but the
+final run logged a guest panic after the close request before cleanup completed.
+The user subsequently reported that the left-view issue was not visible in the
+latest check; its intermittent nature still requires further testing.
+See [full results and limitations](CANDIDATE6_SAME_BINARY_RESULTS.md).
+
 ## Build 1
 
 [Build 1](https://github.com/ZenKhalil/Lichii-Orbitals/releases/tag/build-1) was

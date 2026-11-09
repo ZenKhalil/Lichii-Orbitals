@@ -69,14 +69,17 @@ Recurring source-depth and cached-compute replay diagnostics are tracked in
 [#25](https://github.com/ZenKhalil/Lichii-Orbitals/issues/25). Their effect on
 rendering and loading remains unconfirmed.
 
-The latest tested local diagnostic, unreleased **Build 3 candidate 5**, adds
-narrow R16/mixed-store support and identifies why several remaining shaders
-bypass the typed-buffer repairs: they use multiple declarations, including
-mixed numeric types. Known type faults persist. Normal room samples measured
-**25.05 / 24.45 FPS**; a broad left-only flare appeared with both cameras viewing
-the machinery from nearby positions. This is not a stable 30 FPS or complete
-rendering fix, and it does not replace the recommended Build 2 release. See the
-[candidate results](docs/nx2/vulkan-validation-findings.md#build-3-candidate-5).
+The latest tested local diagnostic, unreleased **Build 3 candidate 6**, retains
+the earlier synchronization and typed-buffer repairs and rejects conflicting
+compute captures before serialization. Its same-binary CPU wait experiment
+showed no benefit: one-PAUSE room samples ranged from **24.17 to 25.24 FPS**,
+while the extra-PAUSE run measured **22.71 / 23.73 FPS**. The extra PAUSE stays
+disabled. See the [comparison and limitations](docs/CANDIDATE6_SAME_BINARY_RESULTS.md).
+The user reported that the left-view issue was absent in the latest check;
+the intermittent symptom is not yet proven fixed. Earlier validation still
+identified shaders outside the narrow typed-buffer policy. A separate
+Candidate 7 is being tested for two-declaration compute shaders. Neither
+candidate currently replaces the recommended Build 2 release.
 The earlier monitor-endpoint loss and shutdown hang remain open in
 [#16](https://github.com/ZenKhalil/Lichii-Orbitals/issues/16); testing on a connected
 headset does not demonstrate device-loss recovery.
