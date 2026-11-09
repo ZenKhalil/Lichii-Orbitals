@@ -26,7 +26,7 @@ left-view jitter, glare or static lines. No FPS improvement is claimed.
 Build 2 is the latest recommended numbered release for the verified dependency
 correction and retained startup/audio behavior. It measured 25.40 / 25.35 FPS in
 the initial room, below the 30 FPS target. The unreleased Build 3 candidates'
-[validation findings](nx2/vulkan-validation-findings.md#build-3-candidate-4)
+[validation findings](nx2/vulkan-validation-findings.md#build-3-candidate-5)
 are tracked separately. Candidate 4 retains the transfer/vertex-state repairs,
 immutable compiler replay, typed storage-write variants and Win32 surface-handle
 correction, then adds narrow graphics/compute uniform-fetch variants. Two compute
@@ -35,6 +35,16 @@ remained outside the eligibility policy. Other texel conflicts and visible glare
 remain. Normal room samples measured 24.83 / 25.51 FPS, with no stable 30 FPS or
 release-promotion claim. The earlier monitor audio endpoint loss and shutdown hang
 also remain unresolved.
+
+Candidate 5 adds narrow R16 compute reads and mixed-store support, plus bounded
+family-exclusion diagnostics. Those diagnostics identify multiple declarations
+and mixed numeric types in the remaining incompatible shaders; the narrow
+families still do not cover them. Its normal run completed the opening, movement
+and shutdown, measuring 26.57 / 27.17 FPS in cutscene samples and 25.05 / 24.45 FPS
+in the stationary initial room. The lower cutscene result is unexplained; it
+does not isolate a code regression. A left-only magenta-blue flare appeared with
+both cameras viewing the same machinery from nearby positions. Build 2 remains
+recommended; neither rendering correctness nor stable 30 FPS is established.
 
 ## Build 1
 

@@ -450,3 +450,117 @@ delays.
 **Candidate 4 is not promoted. Build 2 remains the latest recommended published
 release and selected launcher.** Rendering, performance, shutdown and audio
 device recovery issues remain open. Raw logs and game data remain private.
+
+## Build 3 candidate 5
+
+Candidate 5 source is `59f6372b5958e52ffce224567baac6777c07a759` in
+[draft PR #26](https://github.com/ZenKhalil/Lichii-Orbitals/pull/26).
+The GUI SHA-256 is
+`2a421fdabf95533a9363f4c6c8b59370ae7886aff8a9ea01e148958597b34013`.
+It adds feature-supported R16_UINT compute reads, a narrow mixed storage-write
+policy, a secondary-handle guard, and bounded exclusion/Streamline diagnostics.
+The packaged regression selection passed 161 cases / 51,909,455 assertions;
+compiler/cache coverage passed 95 cases / 448,211 assertions. Separate actual
+emitter GPU checks covered one R16 case and 18 mixed-store/image-atomic cases,
+with no Core/Synchronization error. Those synthetic cases do not establish that
+the corresponding game shaders use the new families.
+
+The 891.9-second validation run confirmed the pinned layer and Core/Synchronization
+categories. Both output streams reached EOF without truncation. It recorded 41
+validation errors: 20 compute texel-type errors, 20 indexed-graphics texel-type
+errors and one disabled-privateData-feature error. The 20 layer-count warnings
+and both texel categories reached their respective message caps. No synchronization,
+stride `08608` or Win32 `01307` report appeared on this route; coverage is bounded.
+
+All 40 texel errors matched recorded pipeline/view/descriptor identities. The
+new assessment identifies declaration-count exclusions: two, two and three for
+the principal remaining compute shaders, and four for the graphics shader.
+Consecutive same-pipeline rows show mixed integer/float view tuples; there is
+no explicit Configure transaction ID. Assigning one common numeric class to
+these shaders would not cover those observations. Two other compute shaders
+explicitly reported eligible, built families and matching UINT/R32_UINT views.
+The three later mixed-store targets still emitted 64 incompatible storage rows
+and contained uniform declarations excluded by the narrow store policy. Earlier
+shaders consumed the eight compatible storage-control tickets; missing later
+control rows cannot establish activation.
+
+The returned Streamline requirements did not request privateData. That observation
+does not identify the caller responsible for the validation error. A separate
+NGX feature-update error, `0xbad00002` at 7.539 seconds, has no established cause.
+The usual 135 startup/cache/stub errors remained. All 126 Fermi2D depth operations
+used the software path and matched the prior descriptor/configuration/relative
+address pattern. This does not establish copied-pixel correctness or a new
+slice-copy defect. The three cached-compute replay failures also remained.
+
+First presentation was at 18.785 seconds and stereo Open/Attach at
+36.591/36.594 seconds. These are startup milestones, not gameplay-readiness
+times. The last logged audio counters, at 886.586 seconds, recorded
+40,608,016 copied and accepted frames,
+1.875 seconds cumulative padding, and no queue-full/retry event. No host audio
+fault or native graphics rejection was found. Validation overhead prevents
+using this run as an FPS comparison; counters do not prove audible A/V alignment.
+
+After skipping the opening, both players walked and the left camera rotated.
+Faint bands remained in both initial-room light-cone/back-wall views. No broad
+changing glare appeared in the inspected snapshots, but different camera
+positions prevent a glare-fix claim. Close was requested at 886.865 seconds;
+ForceStop at 887.855 seconds preceded panic 1472 and three related error entries.
+Cleanup and verified OS exit completed without forced termination. This was
+not error-free teardown. Title/global configuration bytes matched across this run.
+
+### Normal gameplay and audio check
+
+The same binary completed the opening without skips, followed by both players
+walking and independent camera movement. No validation layer or texel trace was
+loaded, and no build/native test ran during its measurements. The cache was warm
+after the validation run. Headset output, title configuration and the existing
+GPU clock policy matched the preceding normal run.
+
+| Window | Duration | Mean FPS | p99 frame time | Maximum frame time |
+|---|---:|---:|---:|---:|
+| Opening sample 1 | 30 s | 26.57 | 57.19 ms | 67.60 ms |
+| Opening sample 2 | 20 s | 27.17 | 53.49 ms | 60.17 ms |
+| Initial stationary split room | 30 s | 25.05 | 47.36 ms | 50.09 ms |
+| Same room before movement | 20 s | 24.45 | 48.45 ms | 60.50 ms |
+
+The opening samples were slower than the previous run's approximately 30 FPS.
+The cause is unconfirmed; these are not identical cutscene-frame intervals or
+a controlled rollback comparison. Room performance remains below the target.
+The first enclosing audio interval added 272 padding frames (5.67 ms) and one
+deferral; the other three added no padding or deferral. All four had no
+queue-full/retry event or Error/Critical entry. These intervals bound the
+measurements and do not measure audible A/V alignment.
+
+Faint initial-room bands remained. In the closer machinery view, broad blue
+glare coincided with character head-covering reactions without input, so a game
+effect may contribute. The second player then moved beside the first. While
+opening the close dialog, a large magenta-blue flare covered the left view and
+the nearby right view of the same visible machinery stayed clear; the first
+character's reacting pose appeared in both views. This strengthens the observed
+view asymmetry. Different camera positions/yaw still prevent an identical-pixel
+comparison, shader attribution or a claim that every flash is unintended.
+
+The 1,347-second session's last logged audio counter, at 1,342.782 seconds,
+recorded 62,849,392 copied and accepted audio frames,
+292.7 ms cumulative padding and no queue-full/retry event. All 135 Error/Critical
+entries matched known startup/cache/stub signatures. No host audio fault, guest
+panic, native graphics rejection, failed-family event or new failure capture
+was found. The NGX startup error from validation did not recur. UI close at
+1,343.210 seconds led to ForceStop at 1,344.203 seconds, cleanup at 1,345.717
+seconds and verified OS exit without forced termination or after-close errors.
+
+First presentation was at 15.197 seconds and stereo Open/Attach at
+32.785/32.787 seconds. The cache reported 3,852 pipelines at 8.821 seconds,
+73,703 skipped graphics entries and 64 background entries; the three known
+cached replay failures remained. These are startup milestones, not cold-load
+or exact gameplay-readiness times. Title configuration stayed unchanged.
+The application temporarily rewrote shortcut/default metadata at startup;
+all non-shortcut settings and the final global configuration bytes matched.
+
+A separate CPU-trace preflight after the four benchmarks was aborted before
+recording. No ETL was collected and no profiling, power or sampling setting
+changed. It supplies no CPU-bottleneck evidence. No audio-device-loss recovery
+was exercised in this headset run.
+
+**Candidate 5 remains unreleased and unpromoted. Build 2 remains the latest
+recommended published release and selected launcher.**
