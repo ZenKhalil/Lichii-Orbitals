@@ -51,11 +51,20 @@ void TransitionImageLayout(vk::CommandBuffer& cmdbuf, VkImage image, VkImageLayo
                            VkImageLayout source_layout) {
     constexpr VkFlags flags{VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
                             VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT};
+    const bool source_undefined = source_layout == VK_IMAGE_LAYOUT_UNDEFINED;
+    const bool source_transfer = source_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    const bool target_transfer = target_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    const VkPipelineStageFlags source_stage =
+        source_undefined ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+                         : source_transfer ? VK_PIPELINE_STAGE_TRANSFER_BIT
+                                           : vk::PIPELINE_STAGE_GRAPHICS_COMPUTE;
+    const VkPipelineStageFlags target_stage =
+        target_transfer ? VK_PIPELINE_STAGE_TRANSFER_BIT : vk::PIPELINE_STAGE_GRAPHICS_COMPUTE;
     const VkImageMemoryBarrier barrier{
         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
         .pNext = nullptr,
-        .srcAccessMask = flags,
-        .dstAccessMask = flags,
+        .srcAccessMask = source_undefined ? 0U : source_transfer ? VK_ACCESS_TRANSFER_WRITE_BIT : flags,
+        .dstAccessMask = target_transfer ? VK_ACCESS_TRANSFER_WRITE_BIT : flags,
         .oldLayout = source_layout,
         .newLayout = target_layout,
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
@@ -69,8 +78,7 @@ void TransitionImageLayout(vk::CommandBuffer& cmdbuf, VkImage image, VkImageLayo
             .layerCount = 1,
         },
     };
-    cmdbuf.PipelineBarrier(vk::PIPELINE_STAGE_GRAPHICS_COMPUTE, vk::PIPELINE_STAGE_GRAPHICS_COMPUTE,
-                           0, barrier);
+    cmdbuf.PipelineBarrier(source_stage, target_stage, 0, barrier);
 }
 
 void UploadImage(const Device& device, MemoryAllocator& allocator, Scheduler& scheduler,
@@ -695,8 +703,11 @@ void ClearColorImage(vk::CommandBuffer& cmdbuf, VkImage image) {
         .baseArrayLayer = 0,
         .layerCount = 1,
     }}};
-    TransitionImageLayout(cmdbuf, image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_UNDEFINED);
-    cmdbuf.ClearColorImage(image, VK_IMAGE_LAYOUT_GENERAL, {}, subresources);
+    TransitionImageLayout(cmdbuf, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          VK_IMAGE_LAYOUT_UNDEFINED);
+    cmdbuf.ClearColorImage(image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, {}, subresources);
+    TransitionImageLayout(cmdbuf, image, VK_IMAGE_LAYOUT_GENERAL,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 }
 
 void BeginRenderPass(vk::CommandBuffer& cmdbuf, VkRenderPass render_pass, VkFramebuffer framebuffer,
