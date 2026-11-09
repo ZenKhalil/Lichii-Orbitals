@@ -45,6 +45,8 @@ struct LoweredNativeCode {
     u32 texture_bound = ~0U;
 };
 
+class ComputeEnvironmentSnapshot;
+
 class GenericEnvironment : public Shader::Environment {
 public:
     explicit GenericEnvironment() = default;
@@ -80,6 +82,10 @@ public:
     /// pointers, whatever the slots hold now; called before the program is translated
     void KeepStoragePointers(std::span<const u64> keys);
 
+    /// Arm before the first compute translation query. Does not change query return values.
+    /// The compiler owner must not mutate or query this environment concurrently with capture.
+    void BeginComputeInputCapture();
+
     [[nodiscard]] std::optional<u64> Analyze();
 
     void SetCachedSize(size_t size_bytes);
@@ -112,6 +118,10 @@ public:
     bool HasNativeInstructions() const override;
 
 protected:
+    void RecordComputeCbufValue(u64 key, u32 value);
+    void RecordComputeTextureType(u32 handle, Shader::TextureType type);
+    bool RecordComputeTextureFormat(u32 handle, Shader::TexturePixelFormat format);
+
     std::optional<u64> TryFindSize();
     virtual std::optional<u32> ReadTrapGuardConstant(u32, u32) { return std::nullopt; }
 
@@ -152,6 +162,11 @@ protected:
 
     bool has_unbound_instructions = false;
     bool has_hle_engine_state = false;
+
+private:
+    friend class ComputeEnvironmentSnapshot;
+    bool compute_capture_armed{};
+    bool compute_capture_conflict{};
 };
 
 class GraphicsEnvironment final : public GenericEnvironment {
@@ -267,13 +282,23 @@ public:
                                                                                u32 offset) override;
 
     [[nodiscard]] bool HasHLEMacroState() const override {
-        return cbuf_replacements.size() != 0;
+        return capture_metadata ? capture_metadata->hle_macro_state : !cbuf_replacements.empty();
     }
     bool HasNativeInstructions() const override;
 
     void Dump(u64 pipeline_hash, u64 shader_hash) override;
 
 private:
+    friend class ComputeEnvironmentSnapshot;
+    [[nodiscard]] FileEnvironment CloneForReplay() const;
+
+    struct CaptureMetadata {
+        bool native_program;
+        bool native_instructions;
+        bool hle_macro_state;
+    };
+    // In-memory snapshots preserve exact answers; disk deserialization retains its old behavior.
+    std::optional<CaptureMetadata> capture_metadata;
     std::vector<u64> code;
     ::Common::unordered_map<u32, Shader::TextureType> texture_types;
     ::Common::unordered_map<u32, Shader::TexturePixelFormat> texture_pixel_formats;
@@ -288,6 +313,25 @@ private:
     u32 read_highest{};
     u32 initial_offset{};
     u32 viewport_transform_state = 1;
+};
+
+/// An immutable, owned image of an armed compute environment. No memory manager, engine,
+/// compiler pools or IR pointers are retained. Each replay starts with empty compiler caches.
+class ComputeEnvironmentSnapshot {
+public:
+    [[nodiscard]] static ComputeEnvironmentSnapshot Capture(const GenericEnvironment& source);
+    /// Preserve the loaded compute record's answers and bounds, not inferred historical guest state.
+    [[nodiscard]] static ComputeEnvironmentSnapshot CaptureDiskCompute(const FileEnvironment& source);
+    [[nodiscard]] FileEnvironment CreateReplay() const;
+
+    ComputeEnvironmentSnapshot(ComputeEnvironmentSnapshot&&) noexcept = default;
+    ComputeEnvironmentSnapshot& operator=(ComputeEnvironmentSnapshot&&) noexcept = default;
+    ComputeEnvironmentSnapshot(const ComputeEnvironmentSnapshot&) = delete;
+    ComputeEnvironmentSnapshot& operator=(const ComputeEnvironmentSnapshot&) = delete;
+
+private:
+    explicit ComputeEnvironmentSnapshot(FileEnvironment&& source);
+    FileEnvironment image;
 };
 
 void SerializePipeline(std::span<const char> key, std::span<const GenericEnvironment* const> envs,

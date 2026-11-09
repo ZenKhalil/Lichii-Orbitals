@@ -96,6 +96,7 @@ add_executable(tests
     video_core/ampere_ported_textures.cpp
     video_core/ampere_tennis_i2f.cpp
     video_core/ampere_tennis_tessellation.cpp
+    video_core/compute_input_replay.cpp
     video_core/pipeline_cache_files.cpp
     video_core/storage_binding_capacity.cpp
     video_core/native_indirect_reset.cpp

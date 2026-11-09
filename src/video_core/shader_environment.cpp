@@ -271,8 +271,44 @@ std::vector<u64> GenericEnvironment::MappedStoragePointerKeys() const {
 
 void GenericEnvironment::KeepStoragePointers(std::span<const u64> keys) {
     for (const u64 key : keys) {
+        if (compute_capture_armed) {
+            const auto previous = storage_pointer_types.find(key);
+            if (previous != storage_pointer_types.end() && previous->second != 1) {
+                compute_capture_conflict = true;
+            }
+        }
         storage_pointer_types.insert_or_assign(key, u8{1});
     }
+}
+
+void GenericEnvironment::BeginComputeInputCapture() {
+    if (stage != Shader::Stage::Compute || compute_capture_armed || has_unbound_instructions ||
+        !cbuf_values.empty() || !texture_types.empty() || !texture_pixel_formats.empty()) {
+        throw Shader::LogicError("Compute input capture must begin before translation queries");
+    }
+    compute_capture_armed = true;
+}
+
+void GenericEnvironment::RecordComputeCbufValue(u64 key, u32 value) {
+    const auto [it, inserted] = cbuf_values.emplace(key, value);
+    if (compute_capture_armed && !inserted && it->second != value) {
+        compute_capture_conflict = true;
+    }
+}
+
+void GenericEnvironment::RecordComputeTextureType(u32 handle, Shader::TextureType type) {
+    const auto [it, inserted] = texture_types.emplace(handle, type);
+    if (compute_capture_armed && !inserted && it->second != type) {
+        compute_capture_conflict = true;
+    }
+}
+
+bool GenericEnvironment::RecordComputeTextureFormat(u32 handle, Shader::TexturePixelFormat format) {
+    const auto [it, inserted] = texture_pixel_formats.emplace(handle, format);
+    if (compute_capture_armed && !inserted && it->second != format) {
+        compute_capture_conflict = true;
+    }
+    return inserted;
 }
 
 std::optional<u64> GenericEnvironment::Analyze() {
@@ -290,6 +326,9 @@ std::optional<u64> GenericEnvironment::Analyze() {
 }
 
 void GenericEnvironment::SetCachedSize(size_t size_bytes) {
+    if (compute_capture_armed) {
+        compute_capture_conflict = true;
+    }
     if (native_source_size) {
         if (size_bytes != CachedSizeBytes()) {
             throw Shader::RuntimeError("Native shader changed while constructing pipeline");
@@ -323,6 +362,9 @@ bool GenericEnvironment::HasNativeInstructions() const {
 }
 
 bool FileEnvironment::HasNativeInstructions() const {
+    if (capture_metadata) {
+        return capture_metadata->native_instructions;
+    }
     return Shader::Ampere::HasNativeAddressMap(code);
 }
 
@@ -401,6 +443,9 @@ void GenericEnvironment::Serialize(std::ofstream& file) const {
 }
 
 std::optional<u64> GenericEnvironment::TryFindSize() {
+    if (compute_capture_armed) {
+        compute_capture_conflict = true;
+    }
     static constexpr size_t BLOCK_SIZE = 0x1000;
     static constexpr size_t MAXIMUM_SIZE = 0x100000;
 
@@ -541,6 +586,9 @@ private:
 // environments built later for its pipelines receive that result instead of lowering again.
 void GenericEnvironment::InitializeNativeCode(std::shared_ptr<const LoweredNativeCode> lowered,
                                               u32 source_header_size, bool geometry_stage) {
+    if (compute_capture_armed) {
+        compute_capture_conflict = true;
+    }
     if (!lowered) {
         lowered = LowerNativeCode(source_header_size, geometry_stage);
     }
@@ -1094,7 +1142,7 @@ u32 ComputeEnvironment::ReadCbufValue(u32 cbuf_index, u32 cbuf_offset) {
     if (cbuf_offset < cbuf.size) {
         value = gpu_memory->Read<u32>(cbuf.Address() + cbuf_offset);
     }
-    cbuf_values.emplace(MakeCbufKey(cbuf_index, cbuf_offset), value);
+    RecordComputeCbufValue(MakeCbufKey(cbuf_index, cbuf_offset), value);
     return value;
 }
 
@@ -1103,7 +1151,7 @@ Shader::TextureType ComputeEnvironment::ReadTextureType(u32 handle) {
     const auto& qmd{kepler_compute->launch_description};
     auto entry = ReadTextureInfo(regs.tic.Address(), regs.tic.limit, qmd.linked_tsc != 0, handle);
     const Shader::TextureType result{ConvertTextureType(entry)};
-    texture_types.emplace(handle, result);
+    RecordComputeTextureType(handle, result);
     return result;
 }
 
@@ -1112,7 +1160,7 @@ Shader::TexturePixelFormat ComputeEnvironment::ReadTexturePixelFormat(u32 handle
     const auto& qmd{kepler_compute->launch_description};
     auto entry = ReadTextureInfo(regs.tic.Address(), regs.tic.limit, qmd.linked_tsc != 0, handle);
     const Shader::TexturePixelFormat result(ConvertTexturePixelFormat(entry));
-    const bool inserted{texture_pixel_formats.emplace(handle, result).second};
+    const bool inserted{RecordComputeTextureFormat(handle, result)};
     if (inserted && result == Shader::TexturePixelFormat::R16_FLOAT &&
         kepler_compute->IsNativeMode() && std::getenv("EDEN_NATIVE_DRAW_DIAGNOSTICS")) {
         const auto pair{Tegra::Texture::TexturePair(handle, qmd.linked_tsc != 0)};
@@ -1162,7 +1210,91 @@ u32 ComputeEnvironment::ReadViewportTransformState() {
     return viewport_transform_state;
 }
 
+ComputeEnvironmentSnapshot::ComputeEnvironmentSnapshot(FileEnvironment&& source)
+    : image{std::move(source)} {}
+
+ComputeEnvironmentSnapshot ComputeEnvironmentSnapshot::Capture(const GenericEnvironment& source) {
+    if (source.ShaderStage() != Shader::Stage::Compute || !source.compute_capture_armed ||
+        source.compute_capture_conflict || !source.CanBeSerialized()) {
+        throw Shader::LogicError("Compute inputs were not captured consistently");
+    }
+    if (source.cached_lowest > source.cached_highest || source.cached_lowest % sizeof(u64) != 0 ||
+        source.cached_highest % sizeof(u64) != 0 || source.code.empty() ||
+        (u64{source.cached_highest} - source.cached_lowest) / sizeof(u64) + 1 != source.code.size()) {
+        throw Shader::LogicError("Invalid captured compute instruction bounds");
+    }
+    FileEnvironment target;
+    target.sph = source.SPH();
+    target.gp_passthrough_mask = source.GpPassthroughMask();
+    target.mesh_registers = source.MeshRegisters();
+    target.mesh_primitive_header = source.MeshPrimitiveHeader();
+    target.stage = source.ShaderStage();
+    target.start_address = source.StartAddress();
+    target.is_proprietary_driver = source.IsProprietaryDriver();
+    target.capture_metadata = FileEnvironment::CaptureMetadata{
+        source.IsNativeProgram(), source.HasNativeInstructions(), source.HasHLEMacroState()};
+    target.code = source.code;
+    target.texture_types = source.texture_types;
+    target.texture_pixel_formats = source.texture_pixel_formats;
+    target.cbuf_values = source.cbuf_values;
+    target.storage_pointer_types = source.storage_pointer_types;
+    target.cbuf_replacements = source.cbuf_replacements;
+    target.workgroup_size = source.workgroup_size;
+    target.local_memory_size = source.local_memory_size;
+    target.shared_memory_size = source.shared_memory_size;
+    target.texture_bound = source.texture_bound;
+    target.read_lowest = source.cached_lowest;
+    target.read_highest = source.cached_highest;
+    target.initial_offset = source.initial_offset;
+    target.viewport_transform_state = source.viewport_transform_state;
+    return ComputeEnvironmentSnapshot{std::move(target)};
+}
+
+FileEnvironment FileEnvironment::CloneForReplay() const {
+    FileEnvironment target;
+    target.sph = sph;
+    target.gp_passthrough_mask = gp_passthrough_mask;
+    target.mesh_registers = mesh_registers;
+    target.mesh_primitive_header = mesh_primitive_header;
+    target.stage = stage;
+    target.start_address = start_address;
+    target.is_proprietary_driver = is_proprietary_driver;
+    target.capture_metadata = capture_metadata;
+    target.code = code;
+    target.texture_types = texture_types;
+    target.texture_pixel_formats = texture_pixel_formats;
+    target.cbuf_values = cbuf_values;
+    target.storage_pointer_types = storage_pointer_types;
+    target.cbuf_replacements = cbuf_replacements;
+    target.workgroup_size = workgroup_size;
+    target.local_memory_size = local_memory_size;
+    target.shared_memory_size = shared_memory_size;
+    target.texture_bound = texture_bound;
+    target.read_lowest = read_lowest;
+    target.read_highest = read_highest;
+    target.initial_offset = initial_offset;
+    target.viewport_transform_state = viewport_transform_state;
+    return target;
+}
+
+ComputeEnvironmentSnapshot ComputeEnvironmentSnapshot::CaptureDiskCompute(
+    const FileEnvironment& source) {
+    if (source.ShaderStage() != Shader::Stage::Compute || source.code.empty() ||
+        source.read_lowest > source.read_highest || source.read_lowest % sizeof(u64) != 0 ||
+        source.read_highest % sizeof(u64) != 0 ||
+        (u64{source.read_highest} - source.read_lowest) / sizeof(u64) + 1 != source.code.size()) {
+        throw Shader::LogicError("Invalid loaded compute input record");
+    }
+    // Clone the owned record; do not enable live-capture metadata or reinterpret its read bounds.
+    return ComputeEnvironmentSnapshot{source.CloneForReplay()};
+}
+
+FileEnvironment ComputeEnvironmentSnapshot::CreateReplay() const {
+    return image.CloneForReplay();
+}
+
 void FileEnvironment::Deserialize(std::ifstream& file) {
+    capture_metadata.reset();
     u64 code_size{};
     u64 num_texture_types{};
     u64 num_texture_pixel_formats{};
@@ -1258,12 +1390,15 @@ void FileEnvironment::Dump(u64 pipeline_hash, u64 shader_hash) {
 
 u32 FileEnvironment::TranslateProgramAddress(u32 address) const {
     if (const auto translated = Shader::Ampere::NativeProgramAddress(code, address)) return *translated;
-    if (Shader::Ampere::HasNativeAddressMap(code))
+    if (IsNativeProgram())
         throw Shader::RuntimeError("Invalid cached native indirect branch address {:#x}", address);
     return address;
 }
 
 bool FileEnvironment::IsNativeProgram() const {
+    if (capture_metadata) {
+        return capture_metadata->native_program;
+    }
     return Shader::Ampere::HasNativeAddressMap(code);
 }
 
@@ -1292,7 +1427,10 @@ bool FileEnvironment::IsCbufIndirectStorageBufferPointer(u32 index, u32 offset, 
 }
 
 u64 FileEnvironment::ReadInstruction(u32 address) {
-    if (address < read_lowest || address > read_highest) {
+    if (address < read_lowest || address > read_highest ||
+        (capture_metadata && (address == read_highest ||
+                              (address - read_lowest) % sizeof(u64) != 0 ||
+                              (address - read_lowest) / sizeof(u64) >= code.size()))) {
         throw Shader::LogicError("Out of bounds address {}", address);
     }
     return code[(address - read_lowest) / sizeof(u64)];
