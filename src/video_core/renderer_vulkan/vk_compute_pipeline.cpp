@@ -21,6 +21,7 @@
 #include "video_core/renderer_vulkan/pipeline_statistics.h"
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
 #include "video_core/renderer_vulkan/vk_compute_pipeline.h"
+#include "video_core/renderer_vulkan/texel_type_trace_capture.h"
 #include "video_core/renderer_vulkan/vk_descriptor_pool.h"
 #include "video_core/renderer_vulkan/vk_frame_dump.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
@@ -375,6 +376,7 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
                                 TextureCacheRuntime& texture_runtime,
                                 std::optional<ByteAddressedShadow>& shadow,
                                 BindCommand* deferred_bind) {
+    TexelTypeTrace::Scope texel_trace{&guest_descriptor_queue};
     shadow.reset();
     guest_descriptor_queue.Acquire(scheduler, num_descriptor_entries, uses_descriptor_buffer);
 
@@ -555,6 +557,10 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
     }
 
     buffer_cache.UnbindComputeTextureBuffers();
+    TexelTypeTrace::Offsets trace_offsets;
+    if (texel_trace.Active()) {
+        trace_offsets.SkipBuffers(info);
+    }
     size_t index{};
     const auto add_buffer{[&](const auto& desc) {
         constexpr bool is_image = std::is_same_v<decltype(desc), const ImageBufferDescriptor&>;
@@ -570,10 +576,29 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
                     format = *explicit_format;
                 }
             }
+            if (texel_trace.Active()) {
+                const TexelTypeTrace::Identity identity{
+                    .hash = shader_hash,
+                    .program_address = kepler_compute.regs.code_loc.Address() + qmd.program_start,
+                    .stage = 5,
+                    .native = kepler_compute.IsNativeMode(),
+                };
+                TexelTypeTrace::Capture(
+                    texel_trace, info, identity, trace_offsets, desc, i, views[index].index,
+                    Tegra::Texture::TextureHeaderIndex(views[index].index,
+                                                       kepler_compute.regs.tic.limit,
+                                                       gpu_memory.UsesNativeTiling()),
+                    image_view.format, format, image_view.GpuAddr(), image_view.BufferSize(),
+                    static_cast<u32>(image_view.type));
+            }
             buffer_cache.BindComputeTextureBuffer(index, image_view.GpuAddr(),
                                                   image_view.BufferSize(), format,
                                                   is_written, is_image);
             ++index;
+        }
+        if (texel_trace.Active()) {
+            ++trace_offsets.binding;
+            trace_offsets.entry += desc.count;
         }
     }};
     std::ranges::for_each(info.texture_buffer_descriptors, add_buffer);
@@ -668,11 +693,16 @@ bool ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
     const bool is_rescaling = !info.texture_descriptors.empty() || !info.image_descriptors.empty();
     auto bind = [this, descriptor_data, is_rescaling, descriptor_buffer_offset,
                       descriptor_buffer_chunk, bind_descriptor_buffer,
-                      rescaling_data = rescaling.Data()](vk::CommandBuffer cmdbuf) {
+                      rescaling_data = rescaling.Data(),
+                      texel_trace = TexelTypeTrace::Scope::SealCurrent()](vk::CommandBuffer cmdbuf) {
         if (bind_descriptor_buffer) {
             const VkDescriptorBufferBindingInfoEXT binding_info{
                 descriptor_buffer_ring.BindingInfo(descriptor_buffer_chunk)};
             cmdbuf.BindDescriptorBuffersEXT(binding_info);
+        }
+        if (texel_trace) {
+            TexelTypeTrace::Report(texel_trace, TexelTypeTrace::Handle(*pipeline),
+                                  static_cast<bool>(pipeline), uses_descriptor_buffer);
         }
         if (!pipeline) {
             return;

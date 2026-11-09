@@ -14,6 +14,7 @@
 #include "video_core/buffer_cache/memory_tracker_base.h"
 #include "video_core/buffer_cache/usage_tracker.h"
 #include "video_core/engines/maxwell_3d.h"
+#include "video_core/renderer_vulkan/texel_type_trace.h"
 #include "video_core/renderer_vulkan/vk_compute_pass.h"
 #include "video_core/renderer_vulkan/vk_multi_range_buffer.h"
 #include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
@@ -273,9 +274,15 @@ public:
         if (format == VideoCore::Surface::PixelFormat::Invalid) {
             format = VideoCore::Surface::PixelFormat::R8_UNORM;
         }
-        guest_descriptor_queue.AddTexelBuffer(buffer.View(offset, size, format),
-                                              buffer.DeviceAddress(), offset, size,
-                                              TexelBufferFormat(format));
+        const auto view = buffer.View(offset, size, format);
+        const auto vk_format = TexelBufferFormat(format);
+        guest_descriptor_queue.AddTexelBuffer(view, buffer.DeviceAddress(), offset, size, vk_format);
+        if (TexelTypeTrace::current) {
+            TexelTypeTrace::Scope::Host(&guest_descriptor_queue,
+                                       guest_descriptor_queue.UpdateCount() - 1,
+                                       TexelTypeTrace::Handle(view), offset, size,
+                                       static_cast<u32>(vk_format));
+        }
     }
 
     bool ShouldLimitDynamicStorageBuffers() const {

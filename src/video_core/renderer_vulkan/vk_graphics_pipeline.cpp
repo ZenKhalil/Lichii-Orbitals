@@ -24,6 +24,7 @@
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
 #include "video_core/renderer_vulkan/vk_frame_dump.h"
 #include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
+#include "video_core/renderer_vulkan/texel_type_trace_capture.h"
 #include "video_core/renderer_vulkan/vk_render_pass_cache.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
@@ -491,6 +492,8 @@ void GraphicsPipeline::AddTransition(GraphicsPipeline* transition) {
 
 template <typename Spec>
 bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
+    TexelTypeTrace::Scope texel_trace{&guest_descriptor_queue,
+                                    !IsMeshPipeline() && !IsEmulatedMesh()};
     boost::container::small_vector<VideoCommon::ImageViewInOut, 160> views;
     boost::container::small_vector<VideoCommon::SamplerId, 96> samplers;
     views.reserve(num_image_elements);
@@ -644,6 +647,13 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
     if constexpr (Spec::has_texture_buffers || Spec::has_image_buffers) {
         VideoCommon::ImageViewInOut* texture_buffer_it{views.data()};
         const auto bind_stage_info{[&](size_t stage) LAMBDA_FORCEINLINE {
+            TexelTypeTrace::Offsets trace_offsets;
+            if (texel_trace.Active()) {
+                for (size_t previous = 0; previous < stage; ++previous) {
+                    trace_offsets.SkipStage(stage_infos[previous]);
+                }
+                trace_offsets.SkipBuffers(stage_infos[stage]);
+            }
             size_t index{};
             const auto add_buffer{[&](const auto& desc) {
                 constexpr bool is_image = std::is_same_v<decltype(desc), const ImageBufferDescriptor&>;
@@ -659,11 +669,36 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
                             format = *explicit_format;
                         }
                     }
+                    if (texel_trace.Active()) {
+                        const auto& config = regs.pipelines[stage + 1];
+                        const bool native = maxwell3d->GetNativeMacroEngine().native_turing;
+                        const TexelTypeTrace::Identity identity{
+                            .hash = key.unique_hashes[stage + 1],
+                            .auxiliary_hash = stage == 0 ? key.unique_hashes[0] : 0,
+                            .program_address = native
+                                ? (u64{config.reserved[0] & 0xff} << 32) | config.reserved[1]
+                                : regs.program_region.Address() + config.offset,
+                            .stage = static_cast<u32>(stage),
+                            .native = native,
+                        };
+                        TexelTypeTrace::Capture(
+                            texel_trace, stage_infos[stage], identity, trace_offsets, desc, i,
+                            texture_buffer_it->index,
+                            Tegra::Texture::TextureHeaderIndex(texture_buffer_it->index,
+                                                               regs.tic.limit,
+                                                               gpu_memory->UsesNativeTiling()),
+                            image_view.format, format, image_view.GpuAddr(), image_view.BufferSize(),
+                            static_cast<u32>(image_view.type));
+                    }
                     buffer_cache.BindGraphicsTextureBuffer(stage, index, image_view.GpuAddr(),
                                                            image_view.BufferSize(), format,
                                                            is_written, is_image);
                     ++index;
                     ++texture_buffer_it;
+                }
+                if (texel_trace.Active()) {
+                    ++trace_offsets.binding;
+                    trace_offsets.entry += desc.count;
                 }
             }};
             buffer_cache.UnbindGraphicsTextureBuffers(stage);
@@ -1022,7 +1057,12 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
                       descriptor_buffer_offset, descriptor_buffer_chunk, bind_descriptor_buffer,
                       rescaling_data = rescaling.Data(), is_rescaling, update_rescaling,
                       uses_render_area = render_area.uses_render_area,
-                      render_area_data = render_area.words](vk::CommandBuffer cmdbuf) {
+                      render_area_data = render_area.words,
+                      texel_trace = TexelTypeTrace::Scope::SealCurrent()](vk::CommandBuffer cmdbuf) {
+        if (texel_trace) {
+            TexelTypeTrace::Report(texel_trace, TexelTypeTrace::Handle(*pipeline),
+                                  pipeline && !build->Failed(), uses_descriptor_buffer);
+        }
         if (bind_descriptor_buffer) {
             const VkDescriptorBufferBindingInfoEXT binding_info{
                 descriptor_buffer_ring.BindingInfo(descriptor_buffer_chunk)};
