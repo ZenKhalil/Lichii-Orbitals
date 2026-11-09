@@ -7,8 +7,10 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <memory>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -536,4 +538,82 @@ TEST_CASE("Warm captured compiler inputs reproduce fresh flag and Phi translatio
         REQUIRE(Count(fresh.program, IR::Opcode::GetCarryFromOp) > 0);
         CHECK(Shader::Backend::SPIRV::EmitSPIRV(profile, fresh.program) == expected);
     }
+}
+
+TEST_CASE("Disk pipeline serialization rejects conflicting captured inputs without altering cache",
+          "[shader][compute_input_replay][pipeline_cache_files]") {
+    for (u32 kind = 0; kind < 4; ++kind) {
+        CAPTURE(kind);
+        ReplayRecordFile temporary;
+        const auto path = temporary.path / "synthetic-pipeline-cache.bin";
+        constexpr u64 key = 0x12345678;
+        constexpr u32 version = 0x10203;
+        CapturedInput good;
+        good.SetPointerAnswers();
+        REQUIRE(good.CanBeSerialized());
+        VideoCommon::SerializePipeline(
+            key, std::array<const VideoCommon::GenericEnvironment*, 1>{&good}, path, version);
+        const auto read_bytes = [&] {
+            std::ifstream input{path, std::ios::binary};
+            REQUIRE(input.good());
+            return std::string{std::istreambuf_iterator<char>{input},
+                               std::istreambuf_iterator<char>{}};
+        };
+        const auto before = read_bytes();
+        REQUIRE_FALSE(before.empty());
+
+        CapturedInput inconsistent;
+        inconsistent.BeginComputeInputCapture();
+        if (kind == 0) {
+            CHECK(inconsistent.ReadCbufValue(0, 0) == 0x12345678);
+            inconsistent.word = 55;
+            CHECK(inconsistent.ReadCbufValue(0, 0) == 55);
+        } else if (kind == 1) {
+            CHECK(inconsistent.ReadTextureType(1) == Shader::TextureType::Buffer);
+            inconsistent.texture_type = Shader::TextureType::Color2D;
+            CHECK(inconsistent.ReadTextureType(1) == Shader::TextureType::Color2D);
+        } else if (kind == 2) {
+            CHECK(inconsistent.ReadTexturePixelFormat(1) == Shader::TexturePixelFormat::R32_UINT);
+            inconsistent.format = Shader::TexturePixelFormat::R32_FLOAT;
+            CHECK(inconsistent.ReadTexturePixelFormat(1) == Shader::TexturePixelFormat::R32_FLOAT);
+        } else {
+            inconsistent.SetPointerAnswers();
+            CHECK_FALSE(inconsistent.IsCbufStorageBufferPointer(1, 0x28));
+            inconsistent.KeepStoragePointers(std::array{Key(1, 0x28)});
+            CHECK(inconsistent.IsCbufStorageBufferPointer(1, 0x28));
+        }
+        CHECK_THROWS_AS(ComputeEnvironmentSnapshot::Capture(inconsistent), Shader::LogicError);
+        CHECK_FALSE(inconsistent.CanBeSerialized());
+        VideoCommon::SerializePipeline(
+            key, std::array<const VideoCommon::GenericEnvironment*, 1>{&inconsistent}, path, version);
+        CHECK(read_bytes() == before);
+
+        size_t records{};
+        VideoCommon::LoadPipelines(
+            std::stop_token{}, path, version,
+            [&](std::ifstream& input, VideoCommon::FileEnvironment environment) {
+                u64 loaded_key{};
+                input.read(reinterpret_cast<char*>(&loaded_key), sizeof(loaded_key));
+                REQUIRE(input.good());
+                CHECK(loaded_key == key);
+                if (records++ == 0) {
+                    CHECK(environment.IsCbufStorageBufferPointer(1, 0x20));
+                    CHECK_FALSE(environment.IsCbufStorageBufferPointer(1, 0x28));
+                }
+            },
+            [](std::ifstream&, std::vector<VideoCommon::FileEnvironment>) {
+                FAIL("Unexpected graphics record in synthetic compute cache");
+            });
+        CHECK(records == 1);
+    }
+    CapturedInput stable;
+    stable.BeginComputeInputCapture();
+    for (u32 repeat = 0; repeat < 3; ++repeat) {
+        static_cast<void>(stable.ReadCbufValue(0, 0));
+        static_cast<void>(stable.ReadTextureType(1));
+        static_cast<void>(stable.ReadTexturePixelFormat(1));
+    }
+    CHECK(stable.CanBeSerialized());
+    stable.MarkUncached();
+    CHECK_FALSE(stable.CanBeSerialized());
 }

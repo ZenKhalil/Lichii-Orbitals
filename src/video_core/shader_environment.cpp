@@ -354,7 +354,7 @@ size_t GenericEnvironment::ReadSizeBytes() const noexcept {
 }
 
 bool GenericEnvironment::CanBeSerialized() const noexcept {
-    return !has_unbound_instructions;
+    return !has_unbound_instructions && !compute_capture_conflict;
 }
 
 bool GenericEnvironment::HasNativeInstructions() const {
