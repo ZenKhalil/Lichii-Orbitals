@@ -263,15 +263,15 @@ Id TextureImage(EmitContext& ctx, IR::TextureInstInfo info, const IR::Value& ind
             const Id idx{index.IsImmediate() ? ctx.Const(index.U32()) : ctx.Def(index)};
             const bool non_uniform{
                 MarkNonUniform(ctx, idx, index, NonUniformKind::UniformTexelBuffer)};
-            const Id ptr{ctx.OpAccessChain(ctx.image_buffer_type, def.id, idx)};
-            const Id object{ctx.OpLoad(ctx.image_buffer_type, ptr)};
+            const Id ptr{ctx.OpAccessChain(def.pointer_type, def.id, idx)};
+            const Id object{ctx.OpLoad(def.image_type, ptr)};
             if (non_uniform) {
                 DecorateNonUniform(ctx, ptr);
                 DecorateNonUniform(ctx, object);
             }
             return object;
         }
-        return ctx.OpLoad(ctx.image_buffer_type, def.id);
+        return ctx.OpLoad(def.image_type, def.id);
     } else {
         const TextureDefinition& def{ctx.textures.at(info.descriptor_index)};
         if (def.count > 1) {
@@ -333,7 +333,7 @@ bool IsTextureMsaa(EmitContext& ctx, const IR::TextureInstInfo& info) {
 
 bool IsTextureInteger(EmitContext& ctx, const IR::TextureInstInfo& info) {
     if (info.type == TextureType::Buffer) {
-        return false;
+        return ctx.texture_buffers.at(info.descriptor_index).is_integer;
     }
     return ctx.textures.at(info.descriptor_index).is_integer;
 }
@@ -715,7 +715,9 @@ Id EmitImageFetch(EmitContext& ctx, IR::Inst* inst, const IR::Value& index, Id c
                   Id lod, Id ms) {
     const auto info{inst->Flags<IR::TextureInstInfo>()};
     const bool is_integer{IsTextureInteger(ctx, info)};
-    const Id result_type{is_integer ? ctx.U32[4] : ctx.F32[4]};
+    const Id result_type{info.type == TextureType::Buffer
+                             ? ctx.texture_buffers.at(info.descriptor_index).result_type
+                             : (is_integer ? ctx.U32[4] : ctx.F32[4])};
     AddOffsetToCoordinates(ctx, info, coords, offset);
     if (info.type == TextureType::Buffer) {
         lod = Id{};

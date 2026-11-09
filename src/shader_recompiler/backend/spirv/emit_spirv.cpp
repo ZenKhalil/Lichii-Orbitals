@@ -659,6 +659,10 @@ void PatchMeshInstructions(std::vector<u32>& code, const EmitContext& ctx) {
 } // Anonymous namespace
 
 std::vector<u32> EmitSPIRV(const Profile& profile, const RuntimeInfo& runtime_info, IR::Program& program, Bindings& bindings) {
+    if (!runtime_info.uniform_texel_types.empty() &&
+        runtime_info.uniform_texel_types.size() != program.info.texture_buffer_descriptors.size()) {
+        throw LogicError("Uniform texel specialization does not match descriptor count");
+    }
     if (runtime_info.single_image_buffer_store_type && !IsSingleTypelessBufferStore(program)) {
         throw LogicError("Typed buffer store requires one static write-only typeless buffer");
     }
