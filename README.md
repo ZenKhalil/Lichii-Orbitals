@@ -64,6 +64,10 @@ and issues [#6](https://github.com/ZenKhalil/Lichii-Orbitals/issues/6),
 [#7](https://github.com/ZenKhalil/Lichii-Orbitals/issues/7) and
 [#8](https://github.com/ZenKhalil/Lichii-Orbitals/issues/8).
 Their connection to the intermittent visual artifacts is still unconfirmed.
+Recurring source-depth and cached-compute replay diagnostics are tracked in
+[#24](https://github.com/ZenKhalil/Lichii-Orbitals/issues/24) and
+[#25](https://github.com/ZenKhalil/Lichii-Orbitals/issues/25). Their effect on
+rendering and loading remains unconfirmed.
 
 The unreleased **Build 3 candidate 3** adds immutable compute-compiler inputs,
 typed variants for a narrow storage-write path, and the correct Win32 surface
