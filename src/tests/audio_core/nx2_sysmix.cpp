@@ -150,6 +150,135 @@ void Sample(Context& context, u32 slot, f32 left, f32 right) {
 }
 }
 
+TEST_CASE("sysmix output purge after detach preserves wrapped audio and notifications",
+          "[sysmix][output_purge]") {
+    Context context;
+    Cursor(context, 2048, 2);
+    Sample(context, 2048, 1.0f, -1.0f);
+    Sample(context, 0, 0.25f, -0.25f);
+    Sample(context, 1, 0.5f, -0.5f);
+    SysmixOutput stream{context.system, *context.process, context.sink, 1, Context::Base,
+                        Context::Size, 0x24};
+    REQUIRE(stream.Open(5, 2, 48000, 2048, 0, 0).IsSuccess());
+    REQUIRE(stream.SetDataNotification(2, 2046).IsSuccess());
+    REQUIRE_FALSE(stream.GetDataEvent()->IsSignaled(context.system.Kernel()));
+    REQUIRE(stream.SetEngaged(true).IsSuccess());
+    REQUIRE(stream.SetEngaged(false).IsSuccess());
+
+    u32 purged = 99;
+    REQUIRE(stream.Purge(1, purged).IsSuccess());
+    REQUIRE(purged == 1);
+    REQUIRE(ReadCursor(context) == 0);
+    u32 write{};
+    REQUIRE(context.Memory().Read32Acquire(Context::Base + 0x1004, write));
+    REQUIRE(write == 2);
+    REQUIRE(stream.GetState() == 1);
+    REQUIRE(stream.GetDataEvent()->IsSignaled(context.system.Kernel()));
+    stream.Pump();
+    REQUIRE(ReadCursor(context) == 0);
+    REQUIRE(stream.GetCounters().accepted_frames == 0);
+
+    REQUIRE(stream.SetEngaged(true).IsSuccess());
+    stream.Pump();
+    REQUIRE(ReadCursor(context) == 2);
+    REQUIRE(stream.GetCounters().accepted_frames == 2);
+    REQUIRE(stream.GetCounters().faults == 0);
+    std::array<s16, 480> output{};
+    context.sink.last->ProcessAudioOutAndRender(output, 240);
+    REQUIRE(output[0] == 8192);
+    REQUIRE(output[1] == -8192);
+    REQUIRE(output[2] == 16384);
+    REQUIRE(output[3] == -16384);
+    REQUIRE(std::ranges::all_of(std::span{output}.subspan(4), [](s16 value) { return value == 0; }));
+}
+
+TEST_CASE("sysmix output purge clamps to available frames and accepts an empty ring",
+          "[sysmix][output_purge]") {
+    Context context;
+    Cursor(context, 2047, 1);
+    SysmixOutput stream{context.system, *context.process, context.sink, 1, Context::Base,
+                        Context::Size, 0x24};
+    REQUIRE(stream.Open(5, 2, 48000, 2048, 0, 0).IsSuccess());
+    u32 requested{};
+    SECTION("zero discards the buffered ring") { requested = 0; }
+    SECTION("large request is bounded by occupancy") { requested = 4096; }
+    u32 purged = 99;
+    REQUIRE(stream.Purge(requested, purged).IsSuccess());
+    REQUIRE(purged == 3);
+    REQUIRE(ReadCursor(context) == 1);
+    REQUIRE(stream.Purge(requested, purged).IsSuccess());
+    REQUIRE(purged == 0);
+    REQUIRE(stream.GetState() == 1);
+    REQUIRE(stream.GetCounters().faults == 0);
+    u32 write{};
+    REQUIRE(context.Memory().Read32Acquire(Context::Base + 0x1004, write));
+    REQUIRE(write == 1);
+}
+
+TEST_CASE("sysmix output purge preserves admitted audio and accepts fresh frames while engaged",
+          "[sysmix][output_purge]") {
+    Context context;
+    Cursor(context, 0, 480);
+    for (u32 i = 0; i < 480; ++i) {
+        Sample(context, i, i < 240 ? 0.25f : 1.0f, i < 240 ? -0.25f : -1.0f);
+    }
+    SysmixOutput stream{context.system, *context.process, context.sink, 1, Context::Base,
+                        Context::Size, 0x24};
+    REQUIRE(stream.Open(5, 2, 48000, 2048, 0, 0).IsSuccess());
+    REQUIRE(stream.SetEngaged(true).IsSuccess());
+    stream.Pump();
+    REQUIRE(ReadCursor(context) == 240);
+    REQUIRE(context.sink.last->GetQueueSize() == 1);
+    u32 purged = 99;
+    REQUIRE(stream.Purge(0, purged).IsSuccess());
+    REQUIRE(purged == 240);
+    REQUIRE(ReadCursor(context) == 480);
+    REQUIRE(stream.GetState() == 2);
+    REQUIRE(context.sink.last->GetQueueSize() == 1);
+    REQUIRE(stream.GetCounters().accepted_frames == 240);
+    std::array<s16, 480> output{};
+    context.sink.last->ProcessAudioOutAndRender(output, 240);
+    for (u32 i = 0; i < output.size(); ++i) {
+        REQUIRE(output[i] == (i % 2 == 0 ? 8192 : -8192));
+    }
+    REQUIRE_FALSE(context.sink.last->HasPendingAudio());
+
+    for (u32 i = 480; i < 720; ++i) {
+        Sample(context, i, 0.5f, -0.5f);
+    }
+    const u32 write = 720;
+    REQUIRE(context.Memory().WriteBlock(Context::Base + 0x1004, &write, sizeof(write)));
+    stream.Pump();
+    REQUIRE(ReadCursor(context) == 720);
+    REQUIRE(stream.GetCounters().accepted_frames == 480);
+    REQUIRE(stream.GetCounters().faults == 0);
+    context.sink.last->ProcessAudioOutAndRender(output, 240);
+    for (u32 i = 0; i < output.size(); ++i) {
+        REQUIRE(output[i] == (i % 2 == 0 ? 16384 : -16384));
+    }
+}
+
+TEST_CASE("sysmix output purge rejects invalid stream state and cursor ownership",
+          "[sysmix][output_purge]") {
+    Context context;
+    SysmixOutput stream{context.system, *context.process, context.sink, 1, Context::Base,
+                        Context::Size, 0x24};
+    u32 purged = 99;
+    REQUIRE(stream.Purge(0, purged) == Service::Audio::ResultOperationFailed);
+    REQUIRE(purged == 0);
+    REQUIRE(stream.Open(5, 2, 48000, 2048, 0, 0).IsSuccess());
+    SECTION("guest changes the server-owned read cursor") { Cursor(context, 1, 2); }
+    SECTION("guest publishes an out-of-range write cursor") { Cursor(context, 0, 2049); }
+    SECTION("read cursor is unmapped") { context.Unmap(Context::Base); }
+    SECTION("write cursor is unmapped") { context.Unmap(Context::Base + 0x1000); }
+    REQUIRE(stream.Purge(0, purged) == Service::Audio::ResultInvalidAddressInfo);
+    REQUIRE(purged == 0);
+    REQUIRE(stream.GetState() == 0);
+    REQUIRE(stream.GetCounters().faults == 1);
+    REQUIRE(stream.Purge(0, purged) == Service::Audio::ResultOperationFailed);
+    REQUIRE(purged == 0);
+}
+
 TEST_CASE("sysmix validates the exact F32 ring allocation and rejects unsupported formats", "[sysmix]") {
     Context context;
     SysmixOutput stream{context.system, *context.process, context.sink, 1, Context::Base,
@@ -226,14 +355,17 @@ TEST_CASE("sysmix plays the Sports Resort Q15 movie ring including wrap and gain
     REQUIRE(stream.GetDataEvent()->IsSignaled(context.system.Kernel()));
 }
 
-TEST_CASE("sysmix advertises only implemented stereo PCM formats", "[sysmix]") {
+TEST_CASE("sysmix advertises implemented stereo and surround PCM formats", "[sysmix]") {
     REQUIRE(SysmixOutput::IsFormatSupported(2, 2, 48000));
     REQUIRE(SysmixOutput::IsFormatSupported(5, 2, 48000));
     for (const u32 format : {0U, 1U, 3U, 4U, 6U, 258U, 261U}) {
         REQUIRE_FALSE(SysmixOutput::IsFormatSupported(format, 2, 48000));
     }
     REQUIRE_FALSE(SysmixOutput::IsFormatSupported(2, 1, 48000));
-    REQUIRE_FALSE(SysmixOutput::IsFormatSupported(2, 6, 48000));
+    REQUIRE(SysmixOutput::IsFormatSupported(2, 6, 48000));
+    REQUIRE(SysmixOutput::IsFormatSupported(5, 6, 48000));
+    REQUIRE_FALSE(SysmixOutput::IsFormatSupported(5, 8, 48000));
+    REQUIRE_FALSE(SysmixOutput::IsInputFormatSupported(5, 6, 48000));
     REQUIRE_FALSE(SysmixOutput::IsFormatSupported(2, 2, 44100));
 }
 
@@ -522,4 +654,65 @@ TEST_CASE("sysmix does not report successful disengage after backend stop failur
     REQUIRE(stream.GetCounters().faults == 1);
     stream.Pump();
     REQUIRE(stream.GetCounters().admitted_blocks == 0);
+}
+
+TEST_CASE("sysmix six-channel float ring preserves wrapped frames and pads all channels",
+          "[sysmix][surround]") {
+    Context context;
+    context.sink.host_channels = 6;
+    constexpr u32 Slots = 512;
+    Cursor(context, Slots - 1, 1);
+    const std::array<f32, 6> first{0.125f, -0.125f, 0.25f, -0.25f, 2.0f, -2.0f};
+    const std::array<f32, 6> second{std::numeric_limits<f32>::quiet_NaN(),
+        std::numeric_limits<f32>::infinity(), 0.5f, -0.5f, 0.75f, -0.75f};
+    REQUIRE(context.Memory().WriteBlock(Context::Base + 0x1040 + (Slots - 1) * 24,
+                                       first.data(), sizeof(first)));
+    REQUIRE(context.Memory().WriteBlock(Context::Base + 0x1040, second.data(), sizeof(second)));
+    SysmixOutput stream{context.system, *context.process, context.sink, 1,
+                        Context::Base, Context::Size, 0x24};
+    REQUIRE(stream.Open(5, 6, 48000, Slots - 1, 0, 0).IsSuccess());
+    REQUIRE(stream.SetGain(0.5f, 0).IsSuccess());
+    REQUIRE(stream.SetEngaged(true).IsSuccess());
+    stream.Pump();
+    REQUIRE(ReadCursor(context) == 1);
+    std::array<s16, 240 * 6 + 2> output;
+    output.fill(12345);
+    context.sink.last->ProcessAudioOutAndRender(std::span{output}.subspan(1, 240 * 6), 240);
+    REQUIRE(output.front() == 12345);
+    REQUIRE(output.back() == 12345);
+    const std::array<s16, 12> expected{2048, -2048, 4096, -4096, 32767, -32768,
+                                     0, 0, 8192, -8192, 12288, -12288};
+    for (size_t i = 0; i < expected.size(); ++i) CHECK(output[i + 1] == expected[i]);
+    CHECK(std::ranges::all_of(std::span{output}.subspan(13, 240 * 6 - 12),
+                             [](s16 value) { return value == 0; }));
+}
+
+TEST_CASE("sysmix six-channel PCM admission keeps frame cursors under backpressure",
+          "[sysmix][surround]") {
+    Context context;
+    context.sink.host_channels = 6;
+    constexpr u32 Frames = 240 * 4;
+    Cursor(context, 0, Frames);
+    std::array<s16, Frames * 6> input;
+    for (size_t frame = 0; frame < Frames; ++frame) {
+        for (size_t channel = 0; channel < 6; ++channel)
+            input[frame * 6 + channel] = static_cast<s16>(frame + channel * 1000);
+    }
+    REQUIRE(context.Memory().WriteBlock(Context::Base + 0x1040, input.data(), sizeof(input)));
+    SysmixOutput stream{context.system, *context.process, context.sink, 1,
+                        Context::Base, Context::Size, 0x24};
+    REQUIRE(stream.Open(2, 6, 48000, 1023, 0, 0).IsSuccess());
+    REQUIRE(stream.SetEngaged(true).IsSuccess());
+    for (int i = 0; i < 3; ++i) stream.Pump();
+    REQUIRE(ReadCursor(context) == 720);
+    stream.Pump();
+    REQUIRE(ReadCursor(context) == 720);
+    std::array<s16, 240 * 6> output;
+    for (u32 block = 0; block < 4; ++block) {
+        context.sink.last->ProcessAudioOutAndRender(output, 240);
+        for (size_t sample = 0; sample < output.size(); ++sample)
+            CHECK(output[sample] == input[block * output.size() + sample]);
+        if (block == 0) stream.Pump();
+    }
+    REQUIRE(ReadCursor(context) == Frames);
 }

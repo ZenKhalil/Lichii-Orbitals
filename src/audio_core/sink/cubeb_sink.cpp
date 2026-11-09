@@ -240,6 +240,7 @@ CubebSink::CubebSink(std::string_view target_device_name) {
         return;
     }
 
+    u32 selected_output_channels{};
     if (target_device_name != auto_device_name && !target_device_name.empty()) {
         cubeb_device_collection collection;
         if (cubeb_enumerate_devices(ctx, static_cast<cubeb_device_type>(
@@ -258,14 +259,30 @@ CubebSink::CubebSink(std::string_view target_device_name) {
                 }
                 if (device.type & CUBEB_DEVICE_TYPE_OUTPUT) {
                     output_device = device.devid;
+                    selected_output_channels = device.max_channels;
                 }
             }
             cubeb_device_collection_destroy(ctx, &collection);
         }
     }
 
-    cubeb_get_max_channel_count(ctx, &device_channels);
-    device_channels = device_channels >= 6U ? 6U : 2U;
+    // The context-wide query describes the default endpoint, not a selected named device.
+    const bool selected_channels_valid = output_device && selected_output_channels != 0;
+    u32 reported_channels = selected_channels_valid ? selected_output_channels : 2U;
+    const char* channel_source = selected_channels_valid ? "selected-output" : "default-output";
+    int channel_result = CUBEB_OK;
+    if (!selected_channels_valid) {
+        channel_result = cubeb_get_max_channel_count(ctx, &reported_channels);
+        if (channel_result != CUBEB_OK) {
+            reported_channels = 2;
+            channel_source = "stereo-fallback";
+        }
+    }
+    device_channels = reported_channels >= 6U ? 6U : 2U;
+    LOG_INFO(Audio_Sink,
+             "Cubeb output channels: requested={} selected={} source={} max={} stream={} result={}",
+             target_device_name, output_device != nullptr, channel_source, reported_channels,
+             device_channels, channel_result);
 }
 
 CubebSink::~CubebSink() {

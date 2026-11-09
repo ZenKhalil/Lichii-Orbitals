@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -385,12 +386,18 @@ private:
         rb.Push(result);
     }
 
-    /// Discard requested input frames and return only the count actually purged.
+    /// Discard requested guest-ring frames and return only the count actually purged.
     void PurgeStream(HLERequestContext& ctx) {
         IPC::RequestParser rp{ctx};
         const auto frames = rp.Pop<u32>();
         u32 purged{};
         const auto result = stream->Purge(frames, purged);
+        static const bool ipc_trace = std::getenv("EDEN_NX2_IPC_TRACE") != nullptr;
+        if (ipc_trace) {
+            LOG_INFO(Service_Audio,
+                     "sysmix stream {} purge: input={} requested={} purged={} result={:#x}",
+                     id, stream->IsInput(), frames, purged, result.raw);
+        }
         IPC::ResponseBuilder rb{ctx, 3};
         rb.Push(result);
         rb.Push(purged);

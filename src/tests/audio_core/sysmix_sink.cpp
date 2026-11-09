@@ -163,3 +163,29 @@ TEST_CASE("legacy output and renderer sinks preserve FIFO volume and repeated-fr
         REQUIRE(std::ranges::all_of(output, [](s16 value) { return value == -2000; }));
     }
 }
+
+TEST_CASE("sysmix six-channel sink maps each surround channel and clips downmix",
+          "[sysmix_sink][surround]") {
+    SysmixTests::Context context;
+    auto owned = std::make_unique<SysmixTests::Stream>(
+        context.system, AudioCore::Sink::StreamType::Sysmix, 2, true);
+    auto& stream = *owned;
+    stream.SetSystemChannels(6);
+    stream.SetSystemVolume(1.0f / Settings::Volume());
+    AudioCore::Sink::SinkBuffer block{240, 0, 0, false};
+    std::array<s16, 240 * 6> input{};
+    for (size_t channel = 0; channel < 6; ++channel) input[channel * 6 + channel] = 10000;
+    for (size_t channel = 0; channel < 6; ++channel) input[6 * 6 + channel] = 32767;
+    const std::array<s16, 14> expected{10000, 0, 0, 10000, 5960, 5960, 3540, 3540,
+                                      7070, 0, 0, 7070, 32767, 32767};
+    REQUIRE_FALSE(stream.TryAppendOutputBlock(block, std::span{input}.first(input.size() - 1)));
+    REQUIRE(stream.TryAppendOutputBlock(block, input));
+    std::array<s16, 482> output;
+    output.fill(12345);
+    stream.ProcessAudioOutAndRender(std::span{output}.subspan(1, 480), 240);
+    CHECK(output.front() == 12345);
+    CHECK(output.back() == 12345);
+    for (size_t i = 0; i < expected.size(); ++i) CHECK(output[i + 1] == expected[i]);
+    CHECK(std::ranges::all_of(std::span{output}.subspan(15, 480 - 14),
+                             [](s16 value) { return value == 0; }));
+}
